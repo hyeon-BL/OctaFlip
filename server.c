@@ -445,7 +445,7 @@ void try_start_game(PlayerState all_players[], int current_num_registered_player
             game_board[r][8] = '\0';
         }
         // initial game board setup
-        game_board[0][0] = 'R';
+        game_board[0][6] = 'R';
         game_board[7][0] = 'B';
         game_board[0][7] = 'B';
         game_board[7][7] = 'R';
@@ -601,7 +601,7 @@ void process_registration_request(PlayerState *player, const char *received_json
     }
 
     if (*current_num_registered_players >= MAX_CLIENTS && player->state != P_REGISTERED)
-    { // 이미 등록된 플레이어가 아니라면, 추가 등록 불가
+    { // do not allow more than MAX_CLIENTS registered players
         fprintf(stderr, "Server: Maximum registered players reached. Cannot register '%s'.\n", reg_payload.username);
         ServerRegisterNackPayload nack;
         strcpy(nack.type, "register_nack");
@@ -680,8 +680,33 @@ int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int
         { // Jump
             game_board[r1][c1] = '.';
         }
-        game_board[r2][c2] = player_role;
-        // TODO: Add piece flipping logic here
+        game_board[r2][c2] = player_role; // Clone or jump
+
+        // Flip opponent pieces in the surrounding cells
+        char opponent_role = (player_role == 'R') ? 'B' : 'R';
+        for (int row_offset = -1; row_offset <= 1; ++row_offset)
+        {
+            for (int col_offset = -1; col_offset <= 1; ++col_offset)
+            {
+                if (row_offset == 0 && col_offset == 0)
+                {
+                    continue; // Skip the piece itself
+                }
+
+                int adjacent_r = r2 + row_offset;
+                int adjacent_c = c2 + col_offset;
+
+                // Check bounds for 8x8 board
+                if (adjacent_r >= 0 && adjacent_r < 8 && adjacent_c >= 0 && adjacent_c < 8)
+                {
+                    if (game_board[adjacent_r][adjacent_c] == opponent_role)
+                    {
+                        game_board[adjacent_r][adjacent_c] = player_role;
+                        printf("Server: Flipped opponent piece at (%d,%d) to %c\n", adjacent_r, adjacent_c, player_role);
+                    }
+                }
+            }
+        }
         printf("Server: Move validated and processed (placeholder).\n");
         return 1; // Valid
     }
