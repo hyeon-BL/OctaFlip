@@ -452,7 +452,7 @@ void send_registration_to_server(int sockfd, const char *username)
 void display_board(char board[8][9])
 {
     printf("Current Board:\n");
-    printf("  a b c d e f g h\n");
+    printf("   1 2 3 4 5 6 7 8\n");
     printf(" +-----------------+\n");
     for (int i = 0; i < 8; ++i)
     {
