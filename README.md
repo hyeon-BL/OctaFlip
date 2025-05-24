@@ -31,7 +31,7 @@ The server acts as the authoritative referee, managing game state, validating mo
 
 The project is primarily composed of three main components:
 
-octaflip-online/
+octaflip-online/ <br>
 ├── server.c          # Core server logic, game state management, client handling <br>
 ├── client.c          # Client application, user interaction, server communication <br>
 ├── protocol.h        # Shared definitions: message structs, constants, JSON schemas <br>
