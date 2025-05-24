@@ -32,9 +32,9 @@ The server acts as the authoritative referee, managing game state, validating mo
 The project is primarily composed of three main components:
 
 octaflip-online/
-├── server.c          # Core server logic, game state management, client handling
-├── client.c          # Client application, user interaction, server communication
-├── protocol.h        # Shared definitions: message structs, constants, JSON schemas
+├── server.c          # Core server logic, game state management, client handling <br>
+├── client.c          # Client application, user interaction, server communication <br>
+├── protocol.h        # Shared definitions: message structs, constants, JSON schemas <br>
 └── README.md         # This file
 
 * The core OctaFlip game rules (board mechanics, move validation from Assignment 1) are integrated within `server.c`.
