@@ -285,33 +285,26 @@ char *serialize_server_game_over(const ServerGameOverPayload *payload)
     if (cJSON_AddStringToObject(root, "type", payload->type) == NULL)
         goto error;
 
-    cJSON *scores_array = cJSON_CreateArray();
-    if (scores_array == NULL)
+    cJSON *scores_obj = cJSON_CreateObject(); // Create an object for scores
+    if (scores_obj == NULL)
         goto error;
 
     for (int i = 0; i < 2; ++i)
     { // Assuming MAX_CLIENTS is 2 for scores
-        cJSON *score_obj = cJSON_CreateObject();
-        if (score_obj == NULL)
+        // Ensure username is not empty before adding to JSON to avoid issues with cJSON_AddNumberToObject
+        if (payload->scores[i].username[0] != '\0')
         {
-            cJSON_Delete(scores_array);
-            goto error;
+            if (cJSON_AddNumberToObject(scores_obj, payload->scores[i].username, payload->scores[i].score) == NULL)
+            {
+                // If adding one score fails, clean up scores_obj and root
+                cJSON_Delete(scores_obj);
+                goto error;
+            }
         }
-        if (cJSON_AddStringToObject(score_obj, "username", payload->scores[i].username) == NULL)
-        {
-            cJSON_Delete(score_obj);
-            cJSON_Delete(scores_array);
-            goto error;
-        }
-        if (cJSON_AddNumberToObject(score_obj, "score", payload->scores[i].score) == NULL)
-        {
-            cJSON_Delete(score_obj);
-            cJSON_Delete(scores_array);
-            goto error;
-        }
-        cJSON_AddItemToArray(scores_array, score_obj);
+        // If username is empty (e.g., "N/A" case not fully populated), it will be skipped.
+        // This matches the new format where keys are actual usernames.
     }
-    cJSON_AddItemToObject(root, "scores", scores_array);
+    cJSON_AddItemToObject(root, "scores", scores_obj); // Add the scores object to the root
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -489,7 +482,7 @@ void attempt_game_start(PlayerState all_players[], int current_num_registered_pl
             game_board[r][8] = '\0';
         }
         // initial game board setup
-        game_board[0][6] = 'R';
+        game_board[0][0] = 'R';
         game_board[7][0] = 'B';
         game_board[0][7] = 'B';
         game_board[7][7] = 'R';

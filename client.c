@@ -516,33 +516,46 @@ int deserialize_server_game_over(const char *json_string, ServerGameOverPayload 
     }
     strcpy(out_payload->type, "game_over");
 
-    cJSON *scores_json = cJSON_GetObjectItemCaseSensitive(root, "scores");
-    if (!cJSON_IsArray(scores_json) || cJSON_GetArraySize(scores_json) != 2)
+    cJSON *scores_obj_json = cJSON_GetObjectItemCaseSensitive(root, "scores"); // Get the scores object
+    if (!cJSON_IsObject(scores_obj_json))
     {
         cJSON_Delete(root);
         return -1;
     }
 
-    for (int i = 0; i < 2; ++i)
+    int score_idx = 0;
+    cJSON *current_score_item = NULL;
+    cJSON_ArrayForEach(current_score_item, scores_obj_json) // Iterate through the scores object
     {
-        cJSON *score_item_json = cJSON_GetArrayItem(scores_json, i);
-        if (!cJSON_IsObject(score_item_json))
+        if (score_idx < 2) // Ensure we don't write out of bounds for out_payload->scores
         {
-            cJSON_Delete(root);
-            return -1;
+            if (current_score_item->string != NULL && cJSON_IsNumber(current_score_item))
+            {
+                strncpy(out_payload->scores[score_idx].username, current_score_item->string, MAX_USERNAME_LEN - 1);
+                out_payload->scores[score_idx].username[MAX_USERNAME_LEN - 1] = '\0';
+                out_payload->scores[score_idx].score = current_score_item->valueint;
+                score_idx++;
+            }
+            else
+            {
+                // Malformed item in scores object
+                fprintf(stderr, "Warning: Malformed score item in game_over message.\n");
+            }
         }
-        cJSON *username_json = cJSON_GetObjectItemCaseSensitive(score_item_json, "username");
-        cJSON *score_val_json = cJSON_GetObjectItemCaseSensitive(score_item_json, "score");
+        else
+        {
+            // More scores than expected, log warning or error
+            fprintf(stderr, "Warning: More than 2 scores received in game_over message. Ignoring extras.\n");
+            break;
+        }
+    }
 
-        if (!cJSON_IsString(username_json) || username_json->valuestring == NULL ||
-            !cJSON_IsNumber(score_val_json))
-        {
-            cJSON_Delete(root);
-            return -1;
-        }
-        strncpy(out_payload->scores[i].username, username_json->valuestring, MAX_USERNAME_LEN - 1);
-        out_payload->scores[i].username[MAX_USERNAME_LEN - 1] = '\0';
-        out_payload->scores[i].score = score_val_json->valueint;
+    // If fewer than 2 scores were found (e.g., one player disconnected early and server sent only one score entry)
+    // fill remaining score entries with default "N/A" or 0.
+    for (int i = score_idx; i < 2; ++i)
+    {
+        strcpy(out_payload->scores[i].username, "N/A");
+        out_payload->scores[i].score = 0;
     }
 
     cJSON_Delete(root);
