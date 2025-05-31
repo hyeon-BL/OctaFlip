@@ -19,6 +19,7 @@
 #define BUFFER_SIZE 2048
 #define LISTEN_BACKLOG 10
 #define TURN_TIMEOUT_SECONDS 5
+#define PLAYER_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2) // Max size for a player's receive buffer
 
 // Player state enumeration
 typedef enum
@@ -40,6 +41,8 @@ typedef struct
     socklen_t addr_len;
     char player_role; // 'R' or 'B'
     time_t last_message_time;
+    char recv_buffer[PLAYER_RECV_BUFFER_MAX_LEN]; // Buffer for incoming messages
+    int recv_buffer_len;                          // Current length of data in recv_buffer
 } PlayerState;
 
 // Global variables
@@ -1107,6 +1110,8 @@ void initialize_player_states(PlayerState all_players[])
         all_players[i].state = P_EMPTY;
         memset(all_players[i].username, 0, MAX_USERNAME_LEN);
         all_players[i].player_role = ' ';
+        all_players[i].recv_buffer_len = 0;
+        all_players[i].recv_buffer[0] = '\0';
     }
 }
 
@@ -1402,7 +1407,7 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
 // Function to handle messages from a client
 void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players, char game_board[8][9])
 {
-    char buf[BUFFER_SIZE];
+    char buf[BUFFER_SIZE]; // Temporary buffer for recv
     int nbytes = recv(player->socket_fd, buf, sizeof(buf) - 1, 0);
 
     if (nbytes <= 0)
@@ -1415,51 +1420,84 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
         {
             perror("recv");
         }
-        // remove_player(player, all_players, current_num_clients, current_num_registered_players);
         handle_client_disconnection(player, all_players, game_board);
+        return;
     }
-    else
-    {
-        buf[nbytes] = '\0';
-        printf("Server: Received from socket %d (username: %s): %s\n", player->socket_fd, player->username[0] ? player->username : "N/A", buf);
-        player->last_message_time = time(NULL);
 
-        const char *msg_type_const = get_message_type_from_json(buf); // Returns strdup'd string or NULL
+    // Check for buffer overflow before appending
+    if (player->recv_buffer_len + nbytes >= PLAYER_RECV_BUFFER_MAX_LEN)
+    {
+        fprintf(stderr, "Server: Receive buffer overflow for player %s (socket %d). Disconnecting.\n",
+                player->username[0] ? player->username : "N/A", player->socket_fd);
+        handle_client_disconnection(player, all_players, game_board);
+        return;
+    }
+
+    // Append new data to player's persistent buffer
+    memcpy(player->recv_buffer + player->recv_buffer_len, buf, nbytes);
+    player->recv_buffer_len += nbytes;
+    player->recv_buffer[player->recv_buffer_len] = '\0'; // Null-terminate for strchr
+
+    // Process all complete newline-terminated messages in the buffer
+    char *current_pos = player->recv_buffer;
+    char *newline_ptr;
+    while ((newline_ptr = strchr(current_pos, '\n')) != NULL)
+    {
+        int message_len = newline_ptr - current_pos;
+        char json_message[message_len + 1];
+        strncpy(json_message, current_pos, message_len);
+        json_message[message_len] = '\0';
+
+        printf("Server: Processing message from socket %d (username: %s): %s\n",
+               player->socket_fd, player->username[0] ? player->username : "N/A", json_message);
+
+        player->last_message_time = time(NULL); // Update activity time
+
+        const char *msg_type_const = get_message_type_from_json(json_message);
         if (msg_type_const == NULL)
         {
-            fprintf(stderr, "Server: Could not determine message type from: %s\n", buf);
-            // Optionally send an error to client
-            return;
-        }
-        // Create a mutable copy for strcmp if needed, or just use msg_type_const directly
-        // For safety and consistency, let's keep it const and use it.
-        // char msg_type[64]; // Assuming type field is not too long
-        // strncpy(msg_type, msg_type_const, sizeof(msg_type) - 1);
-        // msg_type[sizeof(msg_type) - 1] = '\0';
-
-        if (strcmp(msg_type_const, "register") == 0)
-        {
-            process_registration_request(player, buf, all_players, current_num_registered_players, game_board);
-        }
-        else if (strcmp(msg_type_const, "move") == 0)
-        {
-            if (player->state == P_PLAYING && current_turn_player_index != -1 && players[current_turn_player_index].socket_fd == player->socket_fd)
-            {
-                process_move_request(player, buf, all_players, game_board);
-            }
-            else
-            {
-                fprintf(stderr, "Server: Move received from %s but not their turn or not playing.\n", player->username);
-                // Optionally send an error message back
-            }
+            fprintf(stderr, "Server: Could not determine message type from: %s. Player: %s\n", json_message, player->username);
+            // Decide if to skip or disconnect. For now, skip to next potential message.
         }
         else
         {
-            fprintf(stderr, "Server: Unknown message type '%s' from %s.\n", msg_type_const, player->username);
-            // Optionally send an error to client
+            if (strcmp(msg_type_const, "register") == 0)
+            {
+                process_registration_request(player, json_message, all_players, current_num_registered_players, game_board);
+            }
+            else if (strcmp(msg_type_const, "move") == 0)
+            {
+                if (player->state == P_PLAYING && current_turn_player_index != -1 &&
+                    all_players[current_turn_player_index].socket_fd == player->socket_fd)
+                {
+                    process_move_request(player, json_message, all_players, game_board);
+                }
+                else
+                {
+                    fprintf(stderr, "Server: Move received from %s but not their turn or not playing.\n", player->username);
+                    // Optionally send an error message back
+                }
+            }
+            else
+            {
+                fprintf(stderr, "Server: Unknown message type '%s' from %s.\n", msg_type_const, player->username);
+                // Optionally send an error to client
+            }
+            free((void *)msg_type_const); // Free the string returned by get_message_type_from_json
         }
-        free((void *)msg_type_const); // Free the string returned by get_message_type_from_json
+
+        // Move to the character after the processed newline
+        current_pos = newline_ptr + 1;
     }
+
+    // Shift remaining partial message (if any) to the beginning of the buffer
+    int remaining_len = player->recv_buffer_len - (current_pos - player->recv_buffer);
+    if (remaining_len > 0 && current_pos != player->recv_buffer)
+    {
+        memmove(player->recv_buffer, current_pos, remaining_len);
+    }
+    player->recv_buffer_len = remaining_len;
+    player->recv_buffer[player->recv_buffer_len] = '\0'; // Null-terminate the potentially shifted buffer
 }
 
 int main(int argc, char *argv[])
