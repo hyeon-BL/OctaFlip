@@ -50,7 +50,6 @@ typedef struct
     char type[32]; // "game_start"
     char players[2][MAX_USERNAME_LEN];
     char first_player[MAX_USERNAME_LEN];
-    char initial_board[8][9]; // Array of 8 strings, each for a row
 } ServerGameStartPayload;
 
 typedef struct
@@ -72,6 +71,7 @@ typedef struct
     char type[32];    // "invalid_move"
     char board[8][9]; // Array of 8 strings
     char next_player[MAX_USERNAME_LEN];
+    char reason[MAX_REASON_LEN]; // Reason for invalid move
 } ServerInvalidMovePayload;
 
 typedef struct
@@ -92,23 +92,13 @@ typedef struct
     PlayerScore scores[2];
 } ServerGameOverPayload;
 
-// 2. Function Prototypes for JSON Utilities (to be implemented in server.c/client.c as needed)
-//    These are examples; you might need more or different signatures.
-//    Consider using a JSON library like cJSON. [cite: 3]
-
-//    Helper to get message type
-//    const char* get_message_type_from_json(const char* json_string);
-
-//    Serialization examples (implement in the file that sends the message)
-//    char* serialize_client_register(const ClientRegisterPayload* payload);
-//    char* serialize_client_move(const ClientMovePayload* payload);
-//    char* serialize_server_game_start(const ServerGameStartPayload* payload);
-//    ... and so on for all messages that need to be sent.
-
-//    Deserialization examples (implement in the file that receives the message)
-//    int deserialize_client_register(const char* json_string, ClientRegisterPayload* out_payload);
-//    int deserialize_server_game_start(const char* json_string, ServerGameStartPayload* out_payload);
-//    ... and so on for all messages that need to be received.
-//    Return 0 for success, -1 for failure.
+/*
+Note on JSON utilities (cJSON.c, cJSON.h, or your own json_utils.c/.h):
+The submission allows for these files[cite: 25].
+You should implement robust serialization and deserialization functions for these payloads.
+Remember to handle the "\n" delimiter for sending and receiving messages[cite: 16, 17, 18, 19, 20, 21].
+Example for sending: char *json_str = cJSON_PrintUnformatted(obj); send(fd, json_str, strlen(json_str), 0); send(fd, "\n", 1, 0); free(json_str); [cite: 17, 18]
+Example for reading: Implement a buffered read that can parse newline-terminated JSON strings[cite: 19, 20, 21].
+*/
 
 #endif // PROTOCOL_H
