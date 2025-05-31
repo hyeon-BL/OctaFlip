@@ -457,6 +457,18 @@ int deserialize_server_invalid_move(const char *json_string, ServerInvalidMovePa
     strncpy(out_payload->next_player, next_player_json->valuestring, MAX_USERNAME_LEN - 1);
     out_payload->next_player[MAX_USERNAME_LEN - 1] = '\0';
 
+    // Optionally parse the reason field
+    cJSON *reason_json = cJSON_GetObjectItemCaseSensitive(root, "reason");
+    if (cJSON_IsString(reason_json) && (reason_json->valuestring != NULL))
+    {
+        strncpy(out_payload->reason, reason_json->valuestring, MAX_REASON_LEN - 1);
+        out_payload->reason[MAX_REASON_LEN - 1] = '\0';
+    }
+    else
+    {
+        out_payload->reason[0] = '\0'; // No reason provided or not a string
+    }
+
     cJSON_Delete(root);
     return 0;
 }
@@ -730,7 +742,15 @@ void handle_server_message(const char *json_message, int sockfd)
         ServerInvalidMovePayload im_payload;
         if (deserialize_server_invalid_move(json_message, &im_payload) == 0)
         {
-            printf("Move invalid by server.\n");
+            printf("Move invalid by server.");
+            if (im_payload.reason[0] != '\0')
+            {
+                printf(" Reason: %s\n", im_payload.reason);
+            }
+            else
+            {
+                printf("\n"); // Newline if no specific reason from server
+            }
             display_board(im_payload.board); // Show current board state
             printf("Next player: %s. It might be your turn again if server indicates.\n", im_payload.next_player);
             // Note: The server should send 'your_turn' again if the current client needs to retry.
