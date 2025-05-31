@@ -73,6 +73,7 @@ void switch_to_next_turn(PlayerState all_players[], char game_board[8][9]);
 int check_and_process_game_over(PlayerState all_players[], char game_board[8][9], int total_moves_completed);
 void handle_client_disconnection(PlayerState *disconnected_player, PlayerState all_players[], char game_board[8][9]);
 int count_player_pieces_on_board(char board[8][9], char player_symbol);
+void attempt_game_start(PlayerState players[], int current_registered_count, char game_board[8][9]);
 
 // --- JSON Utility Stubs ---
 const char *get_message_type_from_json(const char *json_string)
@@ -405,20 +406,21 @@ char *serialize_server_game_start(const ServerGameStartPayload *payload)
     if (!cJSON_AddStringToObject(root, "first_player", payload->first_player))
         goto error;
 
-    cJSON *board_array = cJSON_CreateArray();
-    if (!board_array)
-        goto error;
-    for (int i = 0; i < 8; ++i)
-    {
-        cJSON *row_string = cJSON_CreateString(payload->initial_board[i]);
-        if (!row_string)
-        {
-            cJSON_Delete(board_array);
-            goto error;
-        }
-        cJSON_AddItemToArray(board_array, row_string);
-    }
-    cJSON_AddItemToObject(root, "initial_board", board_array);
+    // The initial_board field is no longer sent in the game_start message as per [cite: 8]
+    // cJSON *board_array = cJSON_CreateArray();
+    // if (!board_array)
+    //     goto error;
+    // for (int i = 0; i < 8; ++i)
+    // {
+    //     cJSON *row_string = cJSON_CreateString(payload->initial_board[i]);
+    //     if (!row_string)
+    //     {
+    //         cJSON_Delete(board_array);
+    //         goto error;
+    //     }
+    //     cJSON_AddItemToArray(board_array, row_string);
+    // }
+    // cJSON_AddItemToObject(root, "initial_board", board_array);
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -428,6 +430,7 @@ error:
     cJSON_Delete(root);
     return NULL;
 }
+
 // --- End JSON Utility Stubs ---
 
 // --- OctaFlip Game Logic Interface (Placeholder) ---
@@ -435,7 +438,7 @@ error:
 // It should return 1 if the move is valid and processed, 0 otherwise.
 // It updates game_board directly if the move is valid.
 
-void try_start_game(PlayerState all_players[], int current_num_registered_players_val, char game_board[8][9])
+void attempt_game_start(PlayerState all_players[], int current_num_registered_players_val, char game_board[8][9])
 {
     if (current_num_registered_players_val == MAX_CLIENTS && current_turn_player_index == -1)
     {
@@ -477,7 +480,11 @@ void try_start_game(PlayerState all_players[], int current_num_registered_player
 
             ServerGameStartPayload gs_payload;
             strcpy(gs_payload.type, "game_start");
-            memcpy(gs_payload.initial_board, game_board, sizeof(gs_payload.initial_board));
+            // Board is initialized internally on the server [cite: 8]
+            // The client does not receive initial_board in game_start message.
+            // However, we might still populate it locally if the struct in protocol.h has it.
+            // This line can be removed if ServerGameStartPayload in protocol.h no longer has initial_board.
+            // memcpy(gs_payload.initial_board, game_board, sizeof(gs_payload.initial_board));
 
             int player_info_count = 0;
             for (int k = 0; k < MAX_CLIENTS; ++k)
@@ -592,7 +599,7 @@ void process_registration_request(PlayerState *player, const char *received_json
             fprintf(stderr, "Server: Username '%s' already taken. Registration failed for socket %d.\n", reg_payload.username, player->socket_fd);
             ServerRegisterNackPayload nack;
             strcpy(nack.type, "register_nack");
-            strcpy(nack.reason, "Username already taken.");
+            strcpy(nack.reason, "invalid"); // Updated reason
             char *nack_json = serialize_server_register_nack(&nack);
             if (nack_json)
             {
@@ -608,7 +615,7 @@ void process_registration_request(PlayerState *player, const char *received_json
         fprintf(stderr, "Server: Maximum registered players reached. Cannot register '%s'.\n", reg_payload.username);
         ServerRegisterNackPayload nack;
         strcpy(nack.type, "register_nack");
-        strcpy(nack.reason, "Server full (max registered players).");
+        strcpy(nack.reason, "invalid"); // Updated reason
         char *nack_json = serialize_server_register_nack(&nack);
         if (nack_json)
         {
@@ -644,7 +651,7 @@ void process_registration_request(PlayerState *player, const char *received_json
 
     if (player->state == P_REGISTERED)
     {
-        try_start_game(all_players, *current_num_registered_players, game_board);
+        attempt_game_start(all_players, *current_num_registered_players, game_board); // Renamed function call
     }
 }
 
