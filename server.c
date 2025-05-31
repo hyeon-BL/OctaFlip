@@ -76,6 +76,26 @@ int count_player_pieces_on_board(char board[8][9], char player_symbol);
 void attempt_game_start(PlayerState players[], int current_registered_count, char game_board[8][9]);
 void log_board_and_move(char current_board[8][9], const char *player_username, int sx, int sy, int tx, int ty, const char *move_type_or_status);
 
+// Helper to get the username of the next playing player
+// Returns 1 if found and populates out_username, 0 otherwise.
+static int get_next_playing_player_username(PlayerState all_players[], int current_player_idx_for_next, char *out_username, size_t username_size)
+{
+    int next_player_candidate = current_player_idx_for_next;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        next_player_candidate = (next_player_candidate + 1) % MAX_CLIENTS;
+        if (all_players[next_player_candidate].state == P_PLAYING)
+        {
+            strncpy(out_username, all_players[next_player_candidate].username, username_size - 1);
+            out_username[username_size - 1] = '\0';
+            return 1; // Found
+        }
+    }
+    strncpy(out_username, "N/A", username_size - 1); // Fallback
+    out_username[username_size - 1] = '\0';
+    return 0; // Not found
+}
+
 // --- JSON Utility Stubs ---
 const char *get_message_type_from_json(const char *json_string)
 {
@@ -1033,21 +1053,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, game_board, sizeof(nack_payload.board));
-        int actual_next_player_idx = (current_turn_player_index + 1) % MAX_CLIENTS;
-        int i = 0;
-        do
-        {
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(nack_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                nack_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(nack_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, nack_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response_nack = serialize_server_invalid_move(&nack_payload);
         if (json_response_nack)
@@ -1086,21 +1092,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
 
-        int actual_next_player_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(ok_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                ok_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(ok_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, ok_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response = serialize_server_move_ok(&ok_payload);
         if (json_response)
@@ -1149,21 +1141,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
 
-        int actual_next_player_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(ok_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                ok_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(ok_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, ok_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response = serialize_server_move_ok(&ok_payload);
         if (json_response)
@@ -1193,21 +1171,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, original_board_on_invalid_move, sizeof(nack_payload.board));
 
-        int actual_next_player_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(nack_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                nack_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(nack_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, nack_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response_nack = serialize_server_invalid_move(&nack_payload);
         if (json_response_nack)
@@ -1248,28 +1212,7 @@ void handle_turn_timeout(PlayerState all_players[], char game_board[8][9])
     ServerPassPayload pass_payload;
     strcpy(pass_payload.type, "pass");
 
-    int next_player_idx = (current_turn_player_index + 1) % MAX_CLIENTS;
-    if (all_players[next_player_idx].state == P_PLAYING)
-    {
-        strcpy(pass_payload.next_player, all_players[next_player_idx].username);
-    }
-    else
-    {
-        int temp_next_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            temp_next_idx = (temp_next_idx + 1) % MAX_CLIENTS;
-            if (all_players[temp_next_idx].state == P_PLAYING)
-            {
-                strcpy(pass_payload.next_player, all_players[temp_next_idx].username);
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(pass_payload.next_player, "N/A");
-    }
+    get_next_playing_player_username(all_players, current_turn_player_index, pass_payload.next_player, MAX_USERNAME_LEN);
 
     char *json_response = serialize_server_pass(&pass_payload);
     if (json_response)
@@ -1660,21 +1603,23 @@ int main(int argc, char *argv[])
     {
         read_fds = master_fds;
         struct timeval tv;
-        tv.tv_sec = 1;
+        tv.tv_sec = 1; // Check for timeouts roughly every second
         tv.tv_usec = 0;
 
         int activity = select(fd_max + 1, &read_fds, NULL, NULL, &tv);
 
-        if (activity == -1)
+        if (activity < 0) // select error
         {
             if (errno == EINTR)
-            {
+            { // Interrupted by signal, continue
                 continue;
             }
             perror("select");
+            // Consider more robust error handling or graceful shutdown
             exit(4);
         }
 
+        // Check for turn timeout if a game is in progress
         if (current_turn_player_index != -1 && players[current_turn_player_index].state == P_PLAYING)
         {
             if (time(NULL) - turn_start_time >= TURN_TIMEOUT_SECONDS)
@@ -1683,16 +1628,19 @@ int main(int argc, char *argv[])
             }
         }
 
+        // Iterate through existing connections looking for data to read or new connections
         for (int i = 0; i <= fd_max; i++)
         {
             if (FD_ISSET(i, &read_fds))
             {
                 if (i == listener_fd)
                 {
+                    // Handle new connection
                     accept_new_connection(listener_fd, players, &num_clients);
                 }
                 else
                 {
+                    // Handle data from an existing client
                     PlayerState *current_player = NULL;
                     for (int j = 0; j < MAX_CLIENTS; j++)
                     {
@@ -1706,16 +1654,12 @@ int main(int argc, char *argv[])
                     {
                         handle_client_message(current_player, players, &num_clients, &num_registered_players, octaflip_board);
                     }
-                    else
-                    {
-                        fprintf(stderr, "Warning: Activity on unmanaged socket %d\n", i);
-                        FD_CLR(i, &master_fds);
-                    }
                 }
             }
         }
     }
 
+    // Cleanup (currently unreachable in this infinite loop)
     close(listener_fd);
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
