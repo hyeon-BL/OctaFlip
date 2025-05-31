@@ -15,9 +15,104 @@
 #define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2) // Max size for client's receive buffer
 
 char client_username[MAX_USERNAME_LEN];
-int my_turn = 0;                                     // Global flag to indicate if it's client's turn
+// int my_turn = 0; // No longer needed for autonomous client
+char my_player_symbol = ' ';                         // Stores 'R' or 'B' for this client
 char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN]; // Persistent buffer for incoming messages
 int client_recv_buffer_len = 0;                      // Current length of data in client_recv_buffer
+
+typedef struct
+{
+    int sx;
+    int sy;
+    int tx;
+    int ty;
+} MoveCoords;
+
+// Helper: Check if coordinates are within board limits (client-side)
+static int isWithinBounds_client(int r, int c)
+{
+    return (r >= 0 && r < 8 && c >= 0 && c < 8);
+}
+
+// Automated Move Generation Function
+MoveCoords move_generate(char current_board[8][9], char player_symbol)
+{
+    MoveCoords move;
+
+    // Try to find a valid clone move first
+    for (int r_src = 0; r_src < 8; ++r_src)
+    {
+        for (int c_src = 0; c_src < 8; ++c_src)
+        {
+            if (current_board[r_src][c_src] == player_symbol)
+            {
+                // Check 1-step neighbors for clone
+                for (int dr = -1; dr <= 1; ++dr)
+                {
+                    for (int dc = -1; dc <= 1; ++dc)
+                    {
+                        if (dr == 0 && dc == 0)
+                            continue; // Skip self
+
+                        int r_dest = r_src + dr;
+                        int c_dest = c_src + dc;
+
+                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
+                        {
+                            move.sx = r_src;
+                            move.sy = c_src;
+                            move.tx = r_dest;
+                            move.ty = c_dest;
+                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            return move;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If no clone move, try to find a valid jump move
+    for (int r_src = 0; r_src < 8; ++r_src)
+    {
+        for (int c_src = 0; c_src < 8; ++c_src)
+        {
+            if (current_board[r_src][c_src] == player_symbol)
+            {
+                // Check 2-step neighbors for jump
+                for (int dr = -1; dr <= 1; ++dr)
+                {
+                    for (int dc = -1; dc <= 1; ++dc)
+                    {
+                        if (dr == 0 && dc == 0)
+                            continue; // Skip self (though for 2-step it's less direct)
+
+                        int r_dest = r_src + 2 * dr;
+                        int c_dest = c_src + 2 * dc;
+
+                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
+                        {
+                            move.sx = r_src;
+                            move.sy = c_src;
+                            move.tx = r_dest;
+                            move.ty = c_dest;
+                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            return move;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If no valid moves found, pass
+    printf("Client AI: No valid moves found. Passing.\n");
+    move.sx = 0;
+    move.sy = 0;
+    move.tx = 0;
+    move.ty = 0;
+    return move;
+}
 
 // JSON Utility Function Implementations (Client-side)
 
@@ -532,6 +627,18 @@ void handle_server_message(const char *json_message, int sockfd)
             printf("Game started!\n");
             printf("Players: %s, %s\n", gs_payload.players[0], gs_payload.players[1]);
             printf("First player: %s\n", gs_payload.first_player);
+
+            // Determine client's player symbol
+            if (strcmp(client_username, gs_payload.first_player) == 0)
+            {
+                my_player_symbol = 'R'; // First player is 'R'
+            }
+            else
+            {
+                my_player_symbol = 'B'; // Second player is 'B'
+            }
+            printf("Client is player %c.\n", my_player_symbol);
+
             // Do NOT display initial board here [cite: 8]. Board comes with first 'your_turn'.
             if (strcmp(gs_payload.first_player, client_username) == 0)
             {
@@ -552,11 +659,48 @@ void handle_server_message(const char *json_message, int sockfd)
         ServerYourTurnPayload yt_payload;
         if (deserialize_server_your_turn(json_message, &yt_payload) == 0)
         {
-            printf("\nIt's your turn!\n");
+            printf("\nIt's your turn! (Automating move)\n");
             display_board(yt_payload.board);
-            printf("You have %.1f seconds. Enter your move (sx sy tx ty): ", yt_payload.timeout);
-            fflush(stdout); // Ensure prompt is displayed before fgets might block
-            my_turn = 1;
+            // printf("You have %.1f seconds. Enter your move (sx sy tx ty): ", yt_payload.timeout); // No longer waiting for user
+            // fflush(stdout); // Ensure prompt is displayed before fgets might block
+            // my_turn = 1; // No longer needed
+
+            if (my_player_symbol == ' ')
+            {
+                fprintf(stderr, "Error: Player symbol not set. Cannot generate move.\n");
+                // This should not happen if game_start was processed correctly.
+                // As a fallback, could try to deduce from board, but risky.
+                // For now, send a pass if symbol is unknown.
+                MoveCoords decided_move = {0, 0, 0, 0}; // Pass
+            }
+
+            MoveCoords decided_move = move_generate(yt_payload.board, my_player_symbol);
+
+            ClientMovePayload move_payload_to_send;
+            strcpy(move_payload_to_send.type, "move");
+            strcpy(move_payload_to_send.username, client_username);
+            move_payload_to_send.sx = decided_move.sx;
+            move_payload_to_send.sy = decided_move.sy;
+            move_payload_to_send.tx = decided_move.tx;
+            move_payload_to_send.ty = decided_move.ty;
+
+            char *json_move_string = serialize_client_move(&move_payload_to_send);
+            if (json_move_string)
+            {
+                printf("Client sending move: (%d,%d) -> (%d,%d)\n",
+                       move_payload_to_send.sx, move_payload_to_send.sy,
+                       move_payload_to_send.tx, move_payload_to_send.ty);
+                if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0 ||
+                    send(sockfd, "\n", 1, 0) < 0)
+                {
+                    perror("send move or newline failed");
+                }
+                free(json_move_string);
+            }
+            else
+            {
+                fprintf(stderr, "Error serializing move message.\n");
+            }
         }
         else
         {
@@ -819,26 +963,26 @@ int main(int argc, char *argv[])
         // Only listen to STDIN if it's our turn, to avoid consuming other input
         // or to allow a "quit" command etc. in the future.
         // For now, strictly only when my_turn = 1.
-        if (my_turn)
-        {
-            FD_SET(STDIN_FILENO, &read_fds);
-        }
+        // if (my_turn) // STDIN handling removed for autonomous client
+        // {
+        //     FD_SET(STDIN_FILENO, &read_fds);
+        // }
         FD_SET(sockfd, &read_fds); // For messages from server
 
         // Adjust max_fd if STDIN_FILENO is included
         int current_max_fd = sockfd;
-        if (my_turn && STDIN_FILENO > sockfd)
-        {
-            current_max_fd = STDIN_FILENO;
-        }
-        else if (my_turn && STDIN_FILENO <= sockfd)
-        {
-            current_max_fd = sockfd; // sockfd is already greater or equal
-        }
-        else
-        {
-            current_max_fd = sockfd; // only sockfd is set
-        }
+        // if (my_turn && STDIN_FILENO > sockfd) // STDIN handling removed
+        // {
+        //     current_max_fd = STDIN_FILENO;
+        // }
+        // else if (my_turn && STDIN_FILENO <= sockfd) // STDIN handling removed
+        // {
+        //     current_max_fd = sockfd;
+        // }
+        // else // STDIN handling removed
+        // {
+        //     current_max_fd = sockfd;
+        // }
 
         // Wait for an activity on one of the sockets
         // The prompt for move is now inside handle_server_message for "your_turn"
@@ -917,6 +1061,8 @@ int main(int argc, char *argv[])
         }
 
         // If something happened on stdin, it's user input for a move
+        // This block is removed as client is autonomous
+        /*
         if (my_turn && FD_ISSET(STDIN_FILENO, &read_fds))
         {
             char input_buffer[100];
@@ -983,6 +1129,7 @@ int main(int argc, char *argv[])
                 my_turn = 0; // Stop trying to read from stdin in this state
             }
         }
+        */
     }
 
     // This part should ideally not be reached if game_over or disconnection is handled properly
