@@ -162,23 +162,39 @@ int deserialize_server_game_start(const char *json_string, ServerGameStartPayloa
     strncpy(out_payload->first_player, first_player_json->valuestring, MAX_USERNAME_LEN - 1);
     out_payload->first_player[MAX_USERNAME_LEN - 1] = '\0';
 
+    // The initial_board field is no longer sent by the server in game_start as per [cite: 8]
+    // If the struct still has it, we can just not populate it or ignore it.
+    // For robustness, if the server *might* send it (e.g. older version),
+    // we can try to parse it but not rely on it.
+    // However, based on the prompt, we should assume it's NOT there.
+    // So, the parsing logic for initial_board in this function can be removed or commented out.
+    /*
     cJSON *board_json = cJSON_GetObjectItemCaseSensitive(root, "initial_board");
     if (!cJSON_IsArray(board_json) || cJSON_GetArraySize(board_json) != 8)
     {
-        cJSON_Delete(root);
-        return -1;
-    }
-    for (int i = 0; i < 8; ++i)
-    {
-        cJSON *row_json = cJSON_GetArrayItem(board_json, i);
-        if (!cJSON_IsString(row_json) || (row_json->valuestring == NULL))
+        // If initial_board is truly optional or not sent, this check might be too strict.
+        // For now, assuming it's not sent, so this block is effectively skipped.
+        // If it were critical and missing, one might cJSON_Delete(root); return -1;
+    } else {
+        for (int i = 0; i < 8; ++i)
         {
-            cJSON_Delete(root);
-            return -1;
+            cJSON *row_json = cJSON_GetArrayItem(board_json, i);
+            if (!cJSON_IsString(row_json) || (row_json->valuestring == NULL))
+            {
+                cJSON_Delete(root);
+                return -1;
+            }
+            strncpy(out_payload->initial_board[i], row_json->valuestring, 8); // Board rows are 8 chars + null
+            out_payload->initial_board[i][8] = '\0';
         }
-        strncpy(out_payload->initial_board[i], row_json->valuestring, 8); // Board rows are 8 chars + null
-        out_payload->initial_board[i][8] = '\0';
     }
+    */
+    // Initialize initial_board to empty or a known state if it's part of the struct but not sent
+    // for (int i = 0; i < 8; ++i)
+    // {
+    //     memset(out_payload->initial_board[i], '.', 8); // Fill with dots
+    //     out_payload->initial_board[i][8] = '\0';       // Null-terminate
+    // }
 
     cJSON_Delete(root);
     return 0;
@@ -516,8 +532,7 @@ void handle_server_message(const char *json_message, int sockfd)
             printf("Game started!\n");
             printf("Players: %s, %s\n", gs_payload.players[0], gs_payload.players[1]);
             printf("First player: %s\n", gs_payload.first_player);
-            printf("Initial Board:\n");
-            display_board(gs_payload.initial_board);
+            // Do NOT display initial board here [cite: 8]. Board comes with first 'your_turn'.
             if (strcmp(gs_payload.first_player, client_username) == 0)
             {
                 printf("It's your turn first! (Waiting for YOUR_TURN message)\n");
