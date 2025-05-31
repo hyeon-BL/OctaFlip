@@ -12,8 +12,12 @@
 // You would need to link against cJSON, e.g., gcc client.c cJSON.c -o client -lm
 
 #define BUFFER_SIZE 2048
+#define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2) // Max size for client's receive buffer
+
 char client_username[MAX_USERNAME_LEN];
-int my_turn = 0; // Global flag to indicate if it's client's turn
+int my_turn = 0;                                     // Global flag to indicate if it's client's turn
+char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN]; // Persistent buffer for incoming messages
+int client_recv_buffer_len = 0;                      // Current length of data in client_recv_buffer
 
 // JSON Utility Function Implementations (Client-side)
 
@@ -438,9 +442,10 @@ void send_registration_to_server(int sockfd, const char *username)
         return;
     }
 
-    if (send(sockfd, json_string, strlen(json_string), 0) < 0)
+    if (send(sockfd, json_string, strlen(json_string), 0) < 0 ||
+        send(sockfd, "\n", 1, 0) < 0) // Added newline
     {
-        perror("send registration failed");
+        perror("send registration or newline failed");
     }
     else
     {
@@ -640,16 +645,80 @@ void handle_server_message(const char *json_message, int sockfd)
 }
 
 // 1. Command-Line Argument Parsing:
-int parse_client_args(int argc, char *argv[], char **server_ip_out, char **server_port_out)
+int parse_client_args(int argc, char *argv[], char **server_ip_out, char **server_port_out, char **username_out)
 {
-    if (argc != 3)
-    {
-        fprintf(stderr, "Usage: %s <server_ip> <server_port>\n", argv[0]);
+    *server_ip_out = NULL;
+    *server_port_out = NULL;
+    *username_out = NULL;
+
+    if (argc < 7)
+    { // Minimum: client_executable -ip IP -port PORT -username USERNAME (7 args)
+        fprintf(stderr, "Usage: %s -ip <server_ip> -port <server_port> -username <username>\n", argv[0]);
         return -1;
     }
-    *server_ip_out = argv[1];
-    *server_port_out = argv[2];
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-ip") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                *server_ip_out = argv[++i];
+            }
+            else
+            {
+                fprintf(stderr, "Error: -ip flag requires an argument.\n");
+                goto usage_error;
+            }
+        }
+        else if (strcmp(argv[i], "-port") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                *server_port_out = argv[++i];
+            }
+            else
+            {
+                fprintf(stderr, "Error: -port flag requires an argument.\n");
+                goto usage_error;
+            }
+        }
+        else if (strcmp(argv[i], "-username") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                *username_out = argv[++i];
+            }
+            else
+            {
+                fprintf(stderr, "Error: -username flag requires an argument.\n");
+                goto usage_error;
+            }
+        }
+        else
+        {
+            fprintf(stderr, "Error: Unknown argument '%s'.\n", argv[i]);
+            goto usage_error;
+        }
+    }
+
+    if (*server_ip_out == NULL || *server_port_out == NULL || *username_out == NULL)
+    {
+        fprintf(stderr, "Error: Missing one or more required arguments (-ip, -port, -username).\n");
+        goto usage_error;
+    }
+
+    if (strlen(*username_out) >= MAX_USERNAME_LEN)
+    {
+        fprintf(stderr, "Error: Username is too long (max %d characters).\n", MAX_USERNAME_LEN - 1);
+        return -1;
+    }
+
     return 0;
+
+usage_error:
+    fprintf(stderr, "Usage: %s -ip <server_ip> -port <server_port> -username <username>\n", argv[0]);
+    return -1;
 }
 
 // 2. Server Connection:
@@ -696,16 +765,21 @@ int main(int argc, char *argv[])
 {
     char *server_ip;
     char *server_port;
+    char *username_from_arg; // Temporary storage for username from args
     int sockfd;
-    char buffer[BUFFER_SIZE];
+    // char buffer[BUFFER_SIZE]; // Temp buffer for recv, data will be moved to client_recv_buffer
 
     // Parse command-line arguments
-    if (parse_client_args(argc, argv, &server_ip, &server_port) == -1)
+    if (parse_client_args(argc, argv, &server_ip, &server_port, &username_from_arg) == -1)
     {
         exit(1);
     }
 
-    printf("Attempting to connect to server %s on port %s...\n", server_ip, server_port);
+    // Copy parsed username to global client_username
+    strncpy(client_username, username_from_arg, MAX_USERNAME_LEN - 1);
+    client_username[MAX_USERNAME_LEN - 1] = '\0';
+
+    printf("Attempting to connect to server %s on port %s for user %s...\n", server_ip, server_port, client_username);
 
     // Connect to the server
     sockfd = connect_to_server(server_ip, server_port);
@@ -717,16 +791,7 @@ int main(int argc, char *argv[])
 
     printf("Connected to server. Socket FD: %d\n", sockfd);
 
-    // User Registration
-    printf("Enter username: ");
-    if (fgets(client_username, MAX_USERNAME_LEN, stdin) == NULL)
-    {
-        fprintf(stderr, "Failed to read username.\n");
-        close(sockfd);
-        exit(1);
-    }
-    client_username[strcspn(client_username, "\n")] = 0; // Remove trailing newline
-
+    // User Registration - username is now from args
     send_registration_to_server(sockfd, client_username);
 
     // Main client loop
@@ -776,14 +841,49 @@ int main(int argc, char *argv[])
         // If something happened on the server socket, then it's an incoming message
         if (FD_ISSET(sockfd, &read_fds))
         {
-            int bytes_received = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
+            char temp_buf[BUFFER_SIZE]; // Temporary buffer for recv
+            int bytes_received = recv(sockfd, temp_buf, sizeof(temp_buf) - 1, 0);
             if (bytes_received > 0)
             {
-                buffer[bytes_received] = '\0';
-                // It's possible to receive multiple JSON messages if they are small and sent quickly,
-                // or a partial message. Proper handling would involve a message framing protocol
-                // (e.g., length prefix or delimiter). For now, assume one JSON message per recv.
-                handle_server_message(buffer, sockfd);
+                temp_buf[bytes_received] = '\0';
+
+                // Append to persistent buffer
+                if (client_recv_buffer_len + bytes_received >= CLIENT_RECV_BUFFER_MAX_LEN)
+                {
+                    fprintf(stderr, "Client receive buffer overflow. Discarding data.\n");
+                    // Potentially disconnect or handle error more gracefully
+                    client_recv_buffer_len = 0; // Clear buffer to prevent further issues
+                }
+                else
+                {
+                    memcpy(client_recv_buffer + client_recv_buffer_len, temp_buf, bytes_received);
+                    client_recv_buffer_len += bytes_received;
+                    client_recv_buffer[client_recv_buffer_len] = '\0'; // Null-terminate combined buffer
+                }
+
+                // Process all complete newline-terminated messages in the buffer
+                char *current_pos = client_recv_buffer;
+                char *newline_ptr;
+                while ((newline_ptr = strchr(current_pos, '\n')) != NULL)
+                {
+                    int message_len = newline_ptr - current_pos;
+                    char single_json_message[message_len + 1];
+                    strncpy(single_json_message, current_pos, message_len);
+                    single_json_message[message_len] = '\0';
+
+                    handle_server_message(single_json_message, sockfd);
+
+                    current_pos = newline_ptr + 1; // Move to start of next message
+                }
+
+                // Shift remaining partial message (if any) to the beginning of the buffer
+                int remaining_len = client_recv_buffer_len - (current_pos - client_recv_buffer);
+                if (remaining_len > 0 && current_pos != client_recv_buffer)
+                {
+                    memmove(client_recv_buffer, current_pos, remaining_len);
+                }
+                client_recv_buffer_len = remaining_len;
+                client_recv_buffer[client_recv_buffer_len] = '\0'; // Null-terminate shifted buffer
             }
             else if (bytes_received == 0)
             {
@@ -827,9 +927,10 @@ int main(int argc, char *argv[])
                         char *json_move_string = serialize_client_move(&move_payload);
                         if (json_move_string)
                         {
-                            if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0)
+                            if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0 ||
+                                send(sockfd, "\n", 1, 0) < 0) // Added newline
                             {
-                                perror("send move failed");
+                                perror("send move or newline failed");
                             }
                             else
                             {
