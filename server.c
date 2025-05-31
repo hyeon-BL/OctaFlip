@@ -463,6 +463,15 @@ void log_board_and_move(char current_board[8][9], const char *player_username, i
 }
 
 // --- OctaFlip Game Logic Interface (Placeholder) ---
+
+// Helper function to convert coordinates from 1-indexed to 0-indexed
+void convert_coordinates_to_zero_indexed(int r1_received, int c1_received, int r2_received, int c2_received, int *r1, int *c1, int *r2, int *c2)
+{
+    *r1 = r1_received - 1;
+    *c1 = c1_received - 1;
+    *r2 = r2_received - 1;
+    *c2 = c2_received - 1;
+}
 // This function would wrap or call your OctaFlip game logic.
 // It should return 1 if the move is valid and processed, 0 otherwise.
 // It updates game_board directly if the move is valid.
@@ -1119,14 +1128,21 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         return;
     }
 
-    int r1 = move_payload.sx;
-    int c1 = move_payload.sy;
-    int r2 = move_payload.tx;
-    int c2 = move_payload.ty;
+    int r1_received = move_payload.sx;
+    int c1_received = move_payload.sy;
+    int r2_received = move_payload.tx;
+    int c2_received = move_payload.ty;
 
-    // Check for pass attempt [cite: 5]
-    if (r1 == 0 && c1 == 0 && r2 == 0 && c2 == 0)
+    int r1, c1, r2, c2; // These will be 0-indexed for internal use
+
+    // Check for pass attempt [cite: 5] - client sends (0,0,0,0) for pass
+    if (r1_received == 0 && c1_received == 0 && r2_received == 0 && c2_received == 0)
     {
+        printf("Server: Player %s attempts to pass (received 0,0,0,0).\n", player->username);
+        r1 = 0;
+        c1 = 0;
+        r2 = 0;
+        c2 = 0; // Pass coordinates remain 0-indexed
         log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Pass");
         consecutive_passes_server++; // Increment for pass
 
@@ -1175,16 +1191,28 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         switch_to_next_turn(all_players, game_board);
         return;
     }
+    else
+    {
+        // Regular move, client sends 1-indexed, convert to 0-indexed for server logic
+        printf("Server: Player %s attempts move (received 1-indexed: %d,%d -> %d,%d).\n",
+               player->username, r1_received, c1_received, r2_received, c2_received);
+        r1 = r1_received - 1;
+        c1 = c1_received - 1;
+        r2 = r2_received - 1;
+        c2 = c2_received - 1;
+        convert_coordinates_to_zero_indexed(r1_received, c1_received, r2_received, c2_received, &r1, &c1, &r2, &c2);
+        printf("Server: Converted to 0-indexed for processing: %d,%d -> %d,%d.\n", r1, c1, r2, c2);
+    }
 
-    // Regular move
-    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move");
+    // Regular move - using 0-indexed r1, c1, r2, c2 from now on
+    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move (0-indexed)");
     char original_board_on_invalid_move[8][9];
     memcpy(original_board_on_invalid_move, game_board, sizeof(original_board_on_invalid_move));
 
     if (validate_and_process_move(game_board, r1, c1, r2, c2, player->player_role))
     {
         consecutive_passes_server = 0; // Reset on a successful move
-        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move");
+        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move (0-indexed)");
         ServerMoveOkPayload ok_payload;
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
@@ -1228,7 +1256,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
     }
     else
     {
-        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move");
+        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move (0-indexed)");
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, original_board_on_invalid_move, sizeof(nack_payload.board));

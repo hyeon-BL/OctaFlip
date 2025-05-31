@@ -59,11 +59,11 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
 
                         if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
                         {
-                            move.sx = r_src;
-                            move.sy = c_src;
-                            move.tx = r_dest;
-                            move.ty = c_dest;
-                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            move.sx = r_src + 1;  // Convert to 1-indexed
+                            move.sy = c_src + 1;  // Convert to 1-indexed
+                            move.tx = r_dest + 1; // Convert to 1-indexed
+                            move.ty = c_dest + 1; // Convert to 1-indexed
+                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
                             return move;
                         }
                     }
@@ -92,11 +92,11 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
 
                         if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
                         {
-                            move.sx = r_src;
-                            move.sy = c_src;
-                            move.tx = r_dest;
-                            move.ty = c_dest;
-                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            move.sx = r_src + 1;  // Convert to 1-indexed
+                            move.sy = c_src + 1;  // Convert to 1-indexed
+                            move.tx = r_dest + 1; // Convert to 1-indexed
+                            move.ty = c_dest + 1; // Convert to 1-indexed
+                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
                             return move;
                         }
                     }
@@ -105,7 +105,7 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
         }
     }
 
-    // If no valid moves found, pass
+    // If no valid moves found, pass (0,0,0,0 indicates pass)
     printf("Client AI: No valid moves found. Passing.\n");
     move.sx = 0;
     move.sy = 0;
@@ -681,16 +681,16 @@ void handle_server_message(const char *json_message, int sockfd)
             {
                 fprintf(stderr, "Error: Player symbol not set. Cannot generate move.\n");
                 // This should not happen if game_start was processed correctly.
-                // As a fallback, could try to deduce from board, but risky.
                 // For now, send a pass if symbol is unknown.
-                MoveCoords decided_move = {0, 0, 0, 0}; // Pass
+                // MoveCoords decided_move = {0, 0, 0, 0}; // Pass // This line is effectively replaced by the logic below
             }
 
-            MoveCoords decided_move = move_generate(yt_payload.board, my_player_symbol);
+            MoveCoords decided_move = move_generate(yt_payload.board, my_player_symbol); // decided_move is 1-indexed or (0,0,0,0) for pass
 
             ClientMovePayload move_payload_to_send;
             strcpy(move_payload_to_send.type, "move");
             strcpy(move_payload_to_send.username, client_username);
+
             move_payload_to_send.sx = decided_move.sx;
             move_payload_to_send.sy = decided_move.sy;
             move_payload_to_send.tx = decided_move.tx;
@@ -699,7 +699,7 @@ void handle_server_message(const char *json_message, int sockfd)
             char *json_move_string = serialize_client_move(&move_payload_to_send);
             if (json_move_string)
             {
-                printf("Client sending move: (%d,%d) -> (%d,%d)\n",
+                printf("Client sending move to server: (%d,%d) -> (%d,%d)\n",
                        move_payload_to_send.sx, move_payload_to_send.sy,
                        move_payload_to_send.tx, move_payload_to_send.ty);
                 if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0 ||
