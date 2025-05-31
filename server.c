@@ -743,6 +743,7 @@ int count_player_pieces_on_board(char board[8][9], char player_symbol)
 }
 
 // Function to notify the current player of their turn
+// Already handles timeout and sends the game board state
 void start_player_turn(PlayerState all_players[], int player_idx, char game_board[8][9])
 {
     if (player_idx < 0 || player_idx >= MAX_CLIENTS || all_players[player_idx].state != P_PLAYING)
