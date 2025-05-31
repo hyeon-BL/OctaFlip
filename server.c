@@ -53,6 +53,7 @@ char octaflip_board[8][9];          // Game board
 int current_turn_player_index = -1; // Index in the 'players' array
 time_t turn_start_time;             // To track the 5s timeout
 int total_moves_made_in_game = 0;   // For game over condition
+int consecutive_passes_server = 0;  // Tracks consecutive passes for game over condition
 
 fd_set master_fds; // Master file descriptor list
 fd_set read_fds;   // Temp file descriptor list for select()
@@ -70,7 +71,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
 void handle_turn_timeout(PlayerState all_players[], char game_board[8][9]);
 void start_player_turn(PlayerState all_players[], int player_idx, char game_board[8][9]);
 void switch_to_next_turn(PlayerState all_players[], char game_board[8][9]);
-int check_and_process_game_over(PlayerState all_players[], char game_board[8][9], int total_moves_completed);
+int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]); // Modified signature
 void handle_client_disconnection(PlayerState *disconnected_player, PlayerState all_players[], char game_board[8][9]);
 int count_player_pieces_on_board(char board[8][9], char player_symbol);
 void attempt_game_start(PlayerState players[], int current_registered_count, char game_board[8][9]);
@@ -772,6 +773,22 @@ int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int
 }
 // --- End OctaFlip Game Logic Interface ---
 
+// Helper function to check for no empty cells on the board
+int noEmptyCellsLeft_server(char board[8][9])
+{
+    for (int i = 0; i < 8; i++)
+    {
+        for (int j = 0; j < 8; j++)
+        {
+            if (board[i][j] == '.')
+            {             // Assuming '.' is empty_cell
+                return 0; // Found an empty cell
+            }
+        }
+    }
+    return 1; // No empty cells found
+}
+
 // Helper function to count pieces for a player
 int count_player_pieces_on_board(char board[8][9], char player_symbol)
 {
@@ -790,15 +807,30 @@ int count_player_pieces_on_board(char board[8][9], char player_symbol)
 }
 
 // Function to notify the current player of their turn
-// Already handles timeout and sends the game board state
 void start_player_turn(PlayerState all_players[], int player_idx, char game_board[8][9])
 {
-    if (player_idx < 0 || player_idx >= MAX_CLIENTS || all_players[player_idx].state != P_PLAYING)
+    if (player_idx < 0 || player_idx >= MAX_CLIENTS)
     {
-        fprintf(stderr, "Error: Cannot start turn for invalid player index %d or player not playing.\n", player_idx);
-        // Potentially try to find next valid player or end game
+        fprintf(stderr, "Error: Cannot start turn for invalid player index %d.\n", player_idx);
         return;
     }
+
+    if (all_players[player_idx].state != P_PLAYING)
+    {
+        // Player is not in a playing state (e.g., disconnected)
+        // Treat as an automatic pass for this player.
+        fprintf(stdout, "Server: Player %s (state %d) is not P_PLAYING, auto-passing turn.\n",
+                all_players[player_idx].username[0] ? all_players[player_idx].username : "N/A_IDX_" + player_idx,
+                all_players[player_idx].state);
+        log_board_and_move(game_board, all_players[player_idx].username[0] ? all_players[player_idx].username : "N/A_AUTO_PASS", -1, -1, -1, -1, "Auto-Pass (Not Playing)");
+        consecutive_passes_server++;
+        // current_turn_player_index should be updated to this player before switching,
+        // so switch_to_next_turn knows who "just passed".
+        current_turn_player_index = player_idx;
+        switch_to_next_turn(all_players, game_board);
+        return;
+    }
+
     current_turn_player_index = player_idx;
     turn_start_time = time(NULL); // Record start of turn for timeout
 
@@ -827,36 +859,88 @@ void start_player_turn(PlayerState all_players[], int player_idx, char game_boar
 }
 
 // Function to check and process game over condition
-int check_and_process_game_over(PlayerState all_players[], char game_board[8][9], int total_moves_completed)
+int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]) // Removed total_moves_completed
 {
-    if (total_moves_completed == 2) // Game over condition: 2 moves made (placeholder)
+    int game_over_flag = 0;
+    char reason[128] = "";
+
+    if (noEmptyCellsLeft_server(game_board))
     {
-        printf("Server: Game over! Total moves reached: %d.\n", total_moves_completed);
+        game_over_flag = 1;
+        strcpy(reason, "No empty cells left");
+    }
+
+    if (!game_over_flag)
+    {
+        int player_r_exists = 0;
+        int player_b_exists = 0;
+        int player_r_pieces = 0;
+        int player_b_pieces = 0;
+
+        for (int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if (all_players[i].player_role == 'R')
+            {
+                player_r_exists = 1;
+                player_r_pieces = count_player_pieces_on_board(game_board, 'R');
+            }
+            else if (all_players[i].player_role == 'B')
+            {
+                player_b_exists = 1;
+                player_b_pieces = count_player_pieces_on_board(game_board, 'B');
+            }
+        }
+
+        if (player_r_exists && player_r_pieces == 0)
+        {
+            game_over_flag = 1;
+            sprintf(reason, "Player R has no pieces");
+        }
+        else if (player_b_exists && player_b_pieces == 0)
+        {
+            game_over_flag = 1;
+            sprintf(reason, "Player B has no pieces");
+        }
+    }
+
+    if (!game_over_flag && consecutive_passes_server >= 2)
+    {
+        game_over_flag = 1;
+        sprintf(reason, "Two consecutive passes (%d)", consecutive_passes_server);
+    }
+
+    if (game_over_flag)
+    {
+        printf("Server: Game over! Reason: %s.\n", reason);
 
         ServerGameOverPayload gop;
         strcpy(gop.type, "game_over");
-
-        // Calculate scores for players[0] and players[1]
-        // Ensure players[0] and players[1] are the actual game participants
-        if (all_players[0].state == P_PLAYING || all_players[0].state == P_DISCONNECTED)
-        { // Check if player 0 was part of the game
-            strcpy(gop.scores[0].username, all_players[0].username);
-            gop.scores[0].score = count_player_pieces_on_board(game_board, all_players[0].player_role);
+        int score_idx = 0;
+        for (int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            // Include players who were part of the game (had a role)
+            if (all_players[i].player_role == 'R' || all_players[i].player_role == 'B')
+            {
+                if (score_idx < 2)
+                {
+                    strncpy(gop.scores[score_idx].username, all_players[i].username, MAX_USERNAME_LEN - 1);
+                    gop.scores[score_idx].username[MAX_USERNAME_LEN - 1] = '\0';
+                    gop.scores[score_idx].score = count_player_pieces_on_board(game_board, all_players[i].player_role);
+                    score_idx++;
+                }
+            }
         }
-        else
-        { // Fallback if player 0 wasn't playing (should not happen in 2-player game)
-            strcpy(gop.scores[0].username, "Player1_ERR");
+        // If only one player was found (e.g. other disconnected very early), fill second score with 0 for "N/A"
+        if (score_idx == 1)
+        {
+            strcpy(gop.scores[1].username, "N/A");
+            gop.scores[1].score = 0;
+        }
+        else if (score_idx == 0)
+        { // Should not happen if game started
+            strcpy(gop.scores[0].username, "N/A_1");
             gop.scores[0].score = 0;
-        }
-
-        if (all_players[1].state == P_PLAYING || all_players[1].state == P_DISCONNECTED)
-        { // Check if player 1 was part of the game
-            strcpy(gop.scores[1].username, all_players[1].username);
-            gop.scores[1].score = count_player_pieces_on_board(game_board, all_players[1].player_role);
-        }
-        else
-        { // Fallback
-            strcpy(gop.scores[1].username, "Player2_ERR");
+            strcpy(gop.scores[1].username, "N/A_2");
             gop.scores[1].score = 0;
         }
 
@@ -888,19 +972,23 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
         // Clean up players involved in the game
         for (int i = 0; i < MAX_CLIENTS; ++i)
         {
+            // Remove any player that was part of the game or is still connected
             if (all_players[i].socket_fd != -1)
-            { // If they haven't been removed by a disconnect already
-                // Check if they were part of this game session (e.g. by role or if their state was P_PLAYING)
-                // For simplicity, if game over, remove both player slots if they were active.
-                // remove_player will set state to P_DISCONNECTED or P_EMPTY.
+            {
                 remove_player(&all_players[i], all_players, &num_clients, &num_registered_players);
+            }
+            else if (all_players[i].player_role == 'R' || all_players[i].player_role == 'B')
+            {
+                // Ensure even disconnected players who had roles are reset if not already
+                all_players[i].state = P_EMPTY; // Or P_DISCONNECTED if preferred for logging
+                memset(all_players[i].username, 0, MAX_USERNAME_LEN);
+                all_players[i].player_role = ' ';
             }
         }
 
         current_turn_player_index = -1;
         total_moves_made_in_game = 0;
-        // num_registered_players should be 0 after remove_player calls.
-        // num_clients might also be 0 if no new clients connected in the meantime.
+        consecutive_passes_server = 0; // Reset for the next game
 
         printf("Server: Game session concluded and reset.\n");
         return 1; // Game is over
@@ -911,10 +999,10 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
 // Function to switch to the next player's turn
 void switch_to_next_turn(PlayerState all_players[], char game_board[8][9])
 {
-    total_moves_made_in_game++;
-    printf("Server: Total moves made: %d\n", total_moves_made_in_game);
+    total_moves_made_in_game++; // A turn always advances, whether by move, pass, or timeout
+    printf("Server: Total moves/turns processed in game: %d. Consecutive passes: %d\n", total_moves_made_in_game, consecutive_passes_server);
 
-    if (check_and_process_game_over(all_players, game_board, total_moves_made_in_game))
+    if (check_and_process_game_over(all_players, game_board))
     {
         return; // Game ended, no next turn
     }
@@ -1040,13 +1128,10 @@ void process_move_request(PlayerState *player, const char *received_json_string,
     if (r1 == 0 && c1 == 0 && r2 == 0 && c2 == 0)
     {
         log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Pass");
-        // For now, assume any 0,0,0,0 is a valid pass request [cite: 5]
-        // "If the pass is valid, respond with move_ok"
-        // If pass validation (e.g. checking if other moves are impossible) is needed, it would go here.
-        // Current placeholder game logic does not have a way to check if a pass is forced.
-        // So, we treat this as a voluntary, valid pass.
+        consecutive_passes_server++; // Increment for pass
 
-        ServerMoveOkPayload ok_payload; // Pass is like a move that doesn't change the board
+        ServerMoveOkPayload ok_payload;
+        // Pass is like a move that doesn't change the board
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board)); // Board doesn't change on pass
 
@@ -1098,6 +1183,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
 
     if (validate_and_process_move(game_board, r1, c1, r2, c2, player->player_role))
     {
+        consecutive_passes_server = 0; // Reset on a successful move
         log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move");
         ServerMoveOkPayload ok_payload;
         strcpy(ok_payload.type, "move_ok");
@@ -1197,6 +1283,7 @@ void handle_turn_timeout(PlayerState all_players[], char game_board[8][9])
     PlayerState *timed_out_player = &all_players[current_turn_player_index];
     printf("Server: Player %s (socket %d) timed out.\n", timed_out_player->username, timed_out_player->socket_fd);
     log_board_and_move(game_board, timed_out_player->username, -1, -1, -1, -1, "Timeout Pass");
+    consecutive_passes_server++; // Increment for timeout pass
 
     ServerPassPayload pass_payload;
     strcpy(pass_payload.type, "pass");
@@ -1420,19 +1507,31 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
 {
     if (disconnected_player == NULL || disconnected_player->socket_fd == -1)
     {
-        // Already processed or invalid player pointer
         return;
     }
 
-    printf("Server: Handling disconnection for player %s (socket %d).\n",
+    printf("Server: Handling disconnection for player %s (socket %d, state %d).\n",
            disconnected_player->username[0] ? disconnected_player->username : "N/A",
-           disconnected_player->socket_fd);
+           disconnected_player->socket_fd, disconnected_player->state);
 
     char disconnected_username_copy[MAX_USERNAME_LEN];
     strncpy(disconnected_username_copy, disconnected_player->username, MAX_USERNAME_LEN - 1);
     disconnected_username_copy[MAX_USERNAME_LEN - 1] = '\0';
+    char disconnected_player_role = disconnected_player->player_role; // Store role before reset
 
-    int game_was_active_with_two_players = (num_registered_players == MAX_CLIENTS && current_turn_player_index != -1);
+    int game_was_active_with_two_players = 0;
+    if (current_turn_player_index != -1)
+    { // Game is considered active if a turn is assigned
+        int playing_count = 0;
+        for (int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if (players[i].state == P_PLAYING)
+                playing_count++;
+        }
+        if (playing_count == MAX_CLIENTS)
+            game_was_active_with_two_players = 1;
+    }
+
     int disconnected_player_slot = -1;
     for (int i = 0; i < MAX_CLIENTS; ++i)
     {
@@ -1443,108 +1542,57 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
         }
     }
 
-    remove_player(disconnected_player, all_players, &num_clients, &num_registered_players);
+    ClientConnectionState old_state = disconnected_player->state;
+    remove_player(disconnected_player, all_players, &num_clients, &num_registered_players); // disconnected_player state is now P_DISCONNECTED or P_EMPTY
 
-    if (game_was_active_with_two_players && num_registered_players == 1)
-    {
-        // One player left, game ends by forfeit.
-        PlayerState *remaining_player = NULL;
-        int remaining_player_slot = -1;
-        for (int i = 0; i < MAX_CLIENTS; ++i)
-        {
-            if (all_players[i].socket_fd != -1 && (all_players[i].state == P_PLAYING || all_players[i].state == P_REGISTERED))
+    if (old_state == P_PLAYING && game_was_active_with_two_players)
+    { // Player was playing in an active game
+        if (num_registered_players == 1)
+        { // One player remains registered and playing
+            printf("Server: Player %s (role %c) disconnected. Game continues with remaining player.\n",
+                   disconnected_username_copy, disconnected_player_role);
+
+            // If it was the disconnected player's turn, they auto-pass.
+            if (disconnected_player_slot == current_turn_player_index)
             {
-                remaining_player = &all_players[i];
-                remaining_player_slot = i;
-                break;
-            }
-        }
-
-        if (remaining_player)
-        {
-            printf("Server: Player %s disconnected. Player %s wins by forfeit.\n",
-                   disconnected_username_copy, remaining_player->username);
-
-            ServerGameOverPayload gop;
-            strcpy(gop.type, "game_over");
-
-            // Determine payload indices based on original player slots if possible,
-            // or assign based on who is remaining vs disconnected.
-            // Assuming players[0] and players[1] map to gop.scores[0] and gop.scores[1].
-            // This requires knowing the original slot of the disconnected player.
-
-            int r_payload_idx = (remaining_player_slot == 0) ? 0 : 1;    // if remaining was players[0] -> scores[0]
-            int d_payload_idx = (disconnected_player_slot == 0) ? 0 : 1; // if disconnected was players[0] -> scores[0]
-
-            // This logic might be flawed if slots don't map directly or if one is -1.
-            // Simplified: assign scores based on who is who.
-            // Let's ensure scores[0] is for players[0] if it was involved, scores[1] for players[1].
-            // If disconnected_player_slot is known:
-            if (disconnected_player_slot == 0)
-            { // disconnected was players[0]
-                strcpy(gop.scores[0].username, disconnected_username_copy);
-                gop.scores[0].score = 0; // Loss by forfeit
-                strcpy(gop.scores[1].username, remaining_player->username);
-                gop.scores[1].score = count_player_pieces_on_board(game_board, remaining_player->player_role); // Or 1 for win
-            }
-            else if (disconnected_player_slot == 1)
-            { // disconnected was players[1]
-                strcpy(gop.scores[1].username, disconnected_username_copy);
-                gop.scores[1].score = 0; // Loss by forfeit
-                strcpy(gop.scores[0].username, remaining_player->username);
-                gop.scores[0].score = count_player_pieces_on_board(game_board, remaining_player->player_role); // Or 1 for win
+                log_board_and_move(game_board, disconnected_username_copy, -1, -1, -1, -1, "Disconnect Pass");
+                consecutive_passes_server++;
+                // current_turn_player_index remains the slot of the (now) disconnected player for context of this pass
+                // switch_to_next_turn will handle advancing from this "passed" turn.
+                switch_to_next_turn(all_players, game_board);
             }
             else
-            { // Fallback if slot unknown (should not happen if logic is correct)
-                // This case needs robust handling if player slots are dynamic or not fixed.
-                // For now, assume fixed player slots 0 and 1.
-                // If remaining_player is players[0], then disconnected must have been players[1] for gop.
-                if (remaining_player == &all_players[0])
-                {
-                    strcpy(gop.scores[0].username, remaining_player->username);
-                    gop.scores[0].score = count_player_pieces_on_board(game_board, remaining_player->player_role);
-                    strcpy(gop.scores[1].username, disconnected_username_copy);
-                    gop.scores[1].score = 0;
-                }
-                else
-                { // remaining_player is players[1]
-                    strcpy(gop.scores[1].username, remaining_player->username);
-                    gop.scores[1].score = count_player_pieces_on_board(game_board, remaining_player->player_role);
-                    strcpy(gop.scores[0].username, disconnected_username_copy);
-                    gop.scores[0].score = 0;
-                }
-            }
-
-            char *json_game_over = serialize_server_game_over(&gop);
-            if (json_game_over)
             {
-                if (send(remaining_player->socket_fd, json_game_over, strlen(json_game_over), 0) == -1 ||
-                    send(remaining_player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                // It was not the disconnected player's turn. Game proceeds.
+                // The current_turn_player_index is still the other active player.
+                // When it eventually becomes the disconnected player's turn slot,
+                // start_player_turn will handle it as an auto-pass.
+                // No immediate action on turn needed here, but check if game ends due to this disconnect
+                if (check_and_process_game_over(all_players, game_board))
                 {
-                    perror("send game_over on forfeit or newline");
+                    return;
                 }
-                free(json_game_over);
             }
-            remove_player(remaining_player, all_players, &num_clients, &num_registered_players);
         }
-        // Reset game state
-        current_turn_player_index = -1;
-        total_moves_made_in_game = 0;
-        printf("Server: Game session ended due to disconnection and reset.\n");
-    }
-    else if (num_registered_players == 0 && game_was_active_with_two_players)
-    {
-        // This means the second player of an active game disconnected.
-        printf("Server: Both players have disconnected from an active game. Resetting.\n");
-        current_turn_player_index = -1;
-        total_moves_made_in_game = 0;
+        else if (num_registered_players == 0)
+        { // Both players (or last playing player) disconnected
+            printf("Server: Last playing player %s disconnected or both players disconnected from an active game. Resetting.\n", disconnected_username_copy);
+            current_turn_player_index = -1;
+            total_moves_made_in_game = 0;
+            consecutive_passes_server = 0;
+            // Game is over, no one to send to. Board reset happens if new game starts.
+            // check_and_process_game_over might have already run if called by switch_to_next_turn from the other player disconnecting.
+            // Explicitly call it here if not already handled, to clean up board state for logging if needed, though players are gone.
+            check_and_process_game_over(all_players, game_board);
+        }
     }
     else if (num_registered_players == 0)
     {
-        // Game was not active or already ended, and last client(s) left.
-        printf("Server: All clients disconnected or game already over. Server idle or reset.\n");
-        current_turn_player_index = -1; // Ensure reset
+        // Game wasn't active or already over, and last client(s) left.
+        printf("Server: All clients disconnected or game was not fully active. Server idle or reset.\n");
+        current_turn_player_index = -1;
         total_moves_made_in_game = 0;
+        consecutive_passes_server = 0;
     }
 }
 
