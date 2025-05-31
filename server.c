@@ -3,15 +3,14 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netdb.h> // For struct addrinfo and getaddrinfo
+#include <netdb.h>
 #include <unistd.h>
-#include <arpa/inet.h>  // For inet_ntop
-#include <sys/select.h> // For select()
-#include <time.h>       // For time_t in PlayerState
-#include "protocol.h"   // Include the protocol header
-#include <errno.h>      // For errno
-#include "cJSON.h"      // Assuming cJSON library is used for JSON parsing/generation.
-// You would need to link against cJSON, e.g., gcc server.c cJSON.c -o server -lm
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <time.h>
+#include "protocol.h"
+#include <errno.h>
+#include "cJSON.h"
 
 // Server configuration
 #define SERVER_PORT "5050"
@@ -19,7 +18,7 @@
 #define BUFFER_SIZE 2048
 #define LISTEN_BACKLOG 10
 #define TURN_TIMEOUT_SECONDS 5
-#define PLAYER_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2) // Max size for a player's receive buffer
+#define PLAYER_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2)
 
 // Player state enumeration
 typedef enum
@@ -71,11 +70,31 @@ void process_move_request(PlayerState *player, const char *received_json_string,
 void handle_turn_timeout(PlayerState all_players[], char game_board[8][9]);
 void start_player_turn(PlayerState all_players[], int player_idx, char game_board[8][9]);
 void switch_to_next_turn(PlayerState all_players[], char game_board[8][9]);
-int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]); // Modified signature
+int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]);
 void handle_client_disconnection(PlayerState *disconnected_player, PlayerState all_players[], char game_board[8][9]);
 int count_player_pieces_on_board(char board[8][9], char player_symbol);
 void attempt_game_start(PlayerState players[], int current_registered_count, char game_board[8][9]);
-void log_board_and_move(char current_board[8][9], const char *player_username, int sx, int sy, int tx, int ty, const char *move_type_or_status); // New
+void log_board_and_move(char current_board[8][9], const char *player_username, int sx, int sy, int tx, int ty, const char *move_type_or_status);
+
+// Helper to get the username of the next playing player
+// Returns 1 if found and populates out_username, 0 otherwise.
+static int get_next_playing_player_username(PlayerState all_players[], int current_player_idx_for_next, char *out_username, size_t username_size)
+{
+    int next_player_candidate = current_player_idx_for_next;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        next_player_candidate = (next_player_candidate + 1) % MAX_CLIENTS;
+        if (all_players[next_player_candidate].state == P_PLAYING)
+        {
+            strncpy(out_username, all_players[next_player_candidate].username, username_size - 1);
+            out_username[username_size - 1] = '\0';
+            return 1; // Found
+        }
+    }
+    strncpy(out_username, "N/A", username_size - 1); // Fallback
+    out_username[username_size - 1] = '\0';
+    return 0; // Not found
+}
 
 // --- JSON Utility Stubs ---
 const char *get_message_type_from_json(const char *json_string)
@@ -99,7 +118,7 @@ const char *get_message_type_from_json(const char *json_string)
         return NULL;
     }
 
-    char *type_str = strdup(type_json->valuestring); // Caller must free this
+    char *type_str = strdup(type_json->valuestring);
     cJSON_Delete(root);
     return type_str;
 }
@@ -140,7 +159,7 @@ int deserialize_client_move(const char *json_string, ClientMovePayload *out_payl
     out_payload->ty = ty_json->valueint;
 
     cJSON_Delete(root);
-    return 0; // Success
+    return 0;
 }
 
 // Serialize ServerYourTurnPayload
@@ -169,7 +188,7 @@ char *serialize_server_your_turn(const ServerYourTurnPayload *payload)
     cJSON_AddItemToObject(root, "board", board_array);
 
     if (cJSON_AddNumberToObject(root, "timeout", payload->timeout) == NULL)
-        goto error; // board_array will be deleted with root
+        goto error;
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -206,7 +225,7 @@ char *serialize_server_move_ok(const ServerMoveOkPayload *payload)
     cJSON_AddItemToObject(root, "board", board_array);
 
     if (cJSON_AddStringToObject(root, "next_player", payload->next_player) == NULL)
-        goto error; // board_array will be deleted with root
+        goto error;
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -243,7 +262,7 @@ char *serialize_server_invalid_move(const ServerInvalidMovePayload *payload)
     cJSON_AddItemToObject(root, "board", board_array);
 
     if (cJSON_AddStringToObject(root, "next_player", payload->next_player) == NULL)
-        goto error; // board_array will be deleted with root
+        goto error;
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -285,33 +304,22 @@ char *serialize_server_game_over(const ServerGameOverPayload *payload)
     if (cJSON_AddStringToObject(root, "type", payload->type) == NULL)
         goto error;
 
-    cJSON *scores_array = cJSON_CreateArray();
-    if (scores_array == NULL)
+    cJSON *scores_obj = cJSON_CreateObject();
+    if (scores_obj == NULL)
         goto error;
 
     for (int i = 0; i < 2; ++i)
-    { // Assuming MAX_CLIENTS is 2 for scores
-        cJSON *score_obj = cJSON_CreateObject();
-        if (score_obj == NULL)
+    {
+        if (payload->scores[i].username[0] != '\0')
         {
-            cJSON_Delete(scores_array);
-            goto error;
+            if (cJSON_AddNumberToObject(scores_obj, payload->scores[i].username, payload->scores[i].score) == NULL)
+            {
+                cJSON_Delete(scores_obj);
+                goto error;
+            }
         }
-        if (cJSON_AddStringToObject(score_obj, "username", payload->scores[i].username) == NULL)
-        {
-            cJSON_Delete(score_obj);
-            cJSON_Delete(scores_array);
-            goto error;
-        }
-        if (cJSON_AddNumberToObject(score_obj, "score", payload->scores[i].score) == NULL)
-        {
-            cJSON_Delete(score_obj);
-            cJSON_Delete(scores_array);
-            goto error;
-        }
-        cJSON_AddItemToArray(scores_array, score_obj);
     }
-    cJSON_AddItemToObject(root, "scores", scores_array);
+    cJSON_AddItemToObject(root, "scores", scores_obj);
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -354,7 +362,7 @@ char *serialize_server_register_ack(const ServerRegisterAckPayload *payload)
     if (!root)
         return NULL;
     if (!cJSON_AddStringToObject(root, "type", payload->type))
-    { // type should be "register_ack"
+    {
         cJSON_Delete(root);
         return NULL;
     }
@@ -369,7 +377,7 @@ char *serialize_server_register_nack(const ServerRegisterNackPayload *payload)
     cJSON *root = cJSON_CreateObject();
     if (!root)
         return NULL;
-    if (!cJSON_AddStringToObject(root, "type", payload->type) || // type should be "register_nack"
+    if (!cJSON_AddStringToObject(root, "type", payload->type) ||
         !cJSON_AddStringToObject(root, "reason", payload->reason))
     {
         cJSON_Delete(root);
@@ -394,7 +402,7 @@ char *serialize_server_game_start(const ServerGameStartPayload *payload)
     if (!players_array)
         goto error;
     for (int i = 0; i < 2; ++i)
-    { // Assuming MAX_CLIENTS is 2
+    {
         cJSON *player_name = cJSON_CreateString(payload->players[i]);
         if (!player_name)
         {
@@ -407,22 +415,6 @@ char *serialize_server_game_start(const ServerGameStartPayload *payload)
 
     if (!cJSON_AddStringToObject(root, "first_player", payload->first_player))
         goto error;
-
-    // The initial_board field is no longer sent in the game_start message as per [cite: 8]
-    // cJSON *board_array = cJSON_CreateArray();
-    // if (!board_array)
-    //     goto error;
-    // for (int i = 0; i < 8; ++i)
-    // {
-    //     cJSON *row_string = cJSON_CreateString(payload->initial_board[i]);
-    //     if (!row_string)
-    //     {
-    //         cJSON_Delete(board_array);
-    //         goto error;
-    //     }
-    //     cJSON_AddItemToArray(board_array, row_string);
-    // }
-    // cJSON_AddItemToObject(root, "initial_board", board_array);
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -441,7 +433,7 @@ void log_board_and_move(char current_board[8][9], const char *player_username, i
     printf("Server Log:\n");
     printf("  Player: %s\n", player_username ? player_username : "N/A");
     if (sx == -1 && sy == -1 && tx == -1 && ty == -1)
-    { // Convention for timeout or non-move events
+    {
         printf("  Action: %s\n", move_type_or_status);
     }
     else if (sx == 0 && sy == 0 && tx == 0 && ty == 0 && (strcmp(move_type_or_status, "Attempted Pass") == 0 || strcmp(move_type_or_status, "Valid Pass") == 0))
@@ -463,9 +455,15 @@ void log_board_and_move(char current_board[8][9], const char *player_username, i
 }
 
 // --- OctaFlip Game Logic Interface (Placeholder) ---
-// This function would wrap or call your OctaFlip game logic.
-// It should return 1 if the move is valid and processed, 0 otherwise.
-// It updates game_board directly if the move is valid.
+
+// Helper function to convert coordinates from 1-indexed to 0-indexed
+void convert_coordinates_to_zero_indexed(int r1_received, int c1_received, int r2_received, int c2_received, int *r1, int *c1, int *r2, int *c2)
+{
+    *r1 = r1_received - 1;
+    *c1 = c1_received - 1;
+    *r2 = r2_received - 1;
+    *c2 = c2_received - 1;
+}
 
 void attempt_game_start(PlayerState all_players[], int current_num_registered_players_val, char game_board[8][9])
 {
@@ -480,7 +478,7 @@ void attempt_game_start(PlayerState all_players[], int current_num_registered_pl
             game_board[r][8] = '\0';
         }
         // initial game board setup
-        game_board[0][6] = 'R';
+        game_board[0][0] = 'R';
         game_board[7][0] = 'B';
         game_board[0][7] = 'B';
         game_board[7][7] = 'R';
@@ -509,11 +507,7 @@ void attempt_game_start(PlayerState all_players[], int current_num_registered_pl
 
             ServerGameStartPayload gs_payload;
             strcpy(gs_payload.type, "game_start");
-            // Board is initialized internally on the server [cite: 8]
-            // The client does not receive initial_board in game_start message.
-            // However, we might still populate it locally if the struct in protocol.h has it.
-            // This line can be removed if ServerGameStartPayload in protocol.h no longer has initial_board.
-            // memcpy(gs_payload.initial_board, game_board, sizeof(gs_payload.initial_board));
+            // Board is initialized internally on the server
 
             int player_info_count = 0;
             for (int k = 0; k < MAX_CLIENTS; ++k)
@@ -546,7 +540,7 @@ void attempt_game_start(PlayerState all_players[], int current_num_registered_pl
                     if (all_players[k].state == P_PLAYING)
                     {
                         if (send(all_players[k].socket_fd, json_gs_message, strlen(json_gs_message), 0) == -1 ||
-                            send(all_players[k].socket_fd, "\n", 1, 0) == -1) // Added newline
+                            send(all_players[k].socket_fd, "\n", 1, 0) == -1)
                         {
                             perror("send game_start or newline");
                             handle_client_disconnection(&all_players[k], all_players, game_board);
@@ -600,10 +594,9 @@ void process_registration_request(PlayerState *player, const char *received_json
         if (nack_json)
         {
             if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send register_nack (invalid state) or newline");
-                // Consider if disconnection is appropriate here or just log
             }
             free(nack_json);
         }
@@ -620,7 +613,7 @@ void process_registration_request(PlayerState *player, const char *received_json
         if (nack_json)
         {
             if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send register_nack (empty username) or newline");
             }
@@ -643,7 +636,7 @@ void process_registration_request(PlayerState *player, const char *received_json
             if (nack_json)
             {
                 if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
-                    send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                    send(player->socket_fd, "\n", 1, 0) == -1)
                 {
                     perror("send register_nack (username taken) or newline");
                 }
@@ -663,7 +656,7 @@ void process_registration_request(PlayerState *player, const char *received_json
         if (nack_json)
         {
             if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send register_nack (server full) or newline");
             }
@@ -685,7 +678,7 @@ void process_registration_request(PlayerState *player, const char *received_json
     if (ack_json)
     {
         if (send(player->socket_fd, ack_json, strlen(ack_json), 0) == -1 ||
-            send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+            send(player->socket_fd, "\n", 1, 0) == -1)
         {
             perror("send register_ack or newline");
             handle_client_disconnection(player, all_players, game_board);
@@ -699,48 +692,40 @@ void process_registration_request(PlayerState *player, const char *received_json
 
     if (player->state == P_REGISTERED)
     {
-        attempt_game_start(all_players, *current_num_registered_players, game_board); // Renamed function call
+        attempt_game_start(all_players, *current_num_registered_players, game_board);
     }
 }
 
 int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int c2, char player_role)
 {
-    // This is where you'd call your existing OctaFlip logic, e.g., from octaflip.c
-    // For example, if you have a function like:
-    // int processMove(char board[8][9], int r1_0based, int c1_0based, int r2_0based, int c2_0based, char currentPlayer);
-    // return processMove(game_board, r1, c1, r2, c2, player_role);
 
-    // Placeholder logic:
     printf("Server: Validating move for %c from (%d,%d) to (%d,%d)\n", player_role, r1, c1, r2, c2);
     if (r1 < 0 || r1 >= 8 || c1 < 0 || c1 >= 8 || r2 < 0 || r2 >= 8 || c2 < 0 || c2 >= 8)
     {
         printf("Server: Move out of bounds.\n");
-        return 0; // Invalid: out of bounds
+        return 0;
     }
     if (game_board[r1][c1] != player_role)
     {
         printf("Server: Source cell does not contain player's piece.\n");
-        return 0; // Invalid: not player's piece at source
+        return 0;
     }
     if (game_board[r2][c2] != '.')
-    { // Assuming '.' is empty
+    {
         printf("Server: Destination cell not empty.\n");
-        return 0; // Invalid: destination not empty
+        return 0;
     }
-    // Simulate a valid move (e.g., a simple jump or clone)
-    // This is highly simplified and needs your actual game rules.
     int dr = abs(r1 - r2);
     int dc = abs(c1 - c2);
 
     if ((dr <= 2 && dc <= 2) && (dr > 0 || dc > 0))
-    { // Basic check for move distance
+    {
         if (dr == 2 || dc == 2)
-        { // Jump
+        {
             game_board[r1][c1] = '.';
         }
-        game_board[r2][c2] = player_role; // Clone or jump
+        game_board[r2][c2] = player_role;
 
-        // Flip opponent pieces in the surrounding cells
         char opponent_role = (player_role == 'R') ? 'B' : 'R';
         for (int row_offset = -1; row_offset <= 1; ++row_offset)
         {
@@ -748,13 +733,12 @@ int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int
             {
                 if (row_offset == 0 && col_offset == 0)
                 {
-                    continue; // Skip the piece itself
+                    continue;
                 }
 
                 int adjacent_r = r2 + row_offset;
                 int adjacent_c = c2 + col_offset;
 
-                // Check bounds for 8x8 board
                 if (adjacent_r >= 0 && adjacent_r < 8 && adjacent_c >= 0 && adjacent_c < 8)
                 {
                     if (game_board[adjacent_r][adjacent_c] == opponent_role)
@@ -766,10 +750,10 @@ int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int
             }
         }
         printf("Server: Move validated and processed (placeholder).\n");
-        return 1; // Valid
+        return 1;
     }
     printf("Server: Move failed validation (placeholder).\n");
-    return 0; // Invalid
+    return 0;
 }
 // --- End OctaFlip Game Logic Interface ---
 
@@ -781,12 +765,12 @@ int noEmptyCellsLeft_server(char board[8][9])
         for (int j = 0; j < 8; j++)
         {
             if (board[i][j] == '.')
-            {             // Assuming '.' is empty_cell
-                return 0; // Found an empty cell
+            {
+                return 0;
             }
         }
     }
-    return 1; // No empty cells found
+    return 1;
 }
 
 // Helper function to count pieces for a player
@@ -796,7 +780,7 @@ int count_player_pieces_on_board(char board[8][9], char player_symbol)
     for (int i = 0; i < 8; i++)
     {
         for (int j = 0; j < 8; j++)
-        { // Iterate 8x8 game board part
+        {
             if (board[i][j] == player_symbol)
             {
                 count++;
@@ -817,49 +801,44 @@ void start_player_turn(PlayerState all_players[], int player_idx, char game_boar
 
     if (all_players[player_idx].state != P_PLAYING)
     {
-        // Player is not in a playing state (e.g., disconnected)
-        // Treat as an automatic pass for this player.
         fprintf(stdout, "Server: Player %s (state %d) is not P_PLAYING, auto-passing turn.\n",
                 all_players[player_idx].username[0] ? all_players[player_idx].username : "N/A_IDX_" + player_idx,
                 all_players[player_idx].state);
         log_board_and_move(game_board, all_players[player_idx].username[0] ? all_players[player_idx].username : "N/A_AUTO_PASS", -1, -1, -1, -1, "Auto-Pass (Not Playing)");
         consecutive_passes_server++;
-        // current_turn_player_index should be updated to this player before switching,
-        // so switch_to_next_turn knows who "just passed".
         current_turn_player_index = player_idx;
         switch_to_next_turn(all_players, game_board);
         return;
     }
 
     current_turn_player_index = player_idx;
-    turn_start_time = time(NULL); // Record start of turn for timeout
+    turn_start_time = time(NULL);
 
     ServerYourTurnPayload payload;
     strcpy(payload.type, "your_turn");
-    memcpy(payload.board, game_board, sizeof(payload.board)); // Copy current board state
+    memcpy(payload.board, game_board, sizeof(payload.board));
     payload.timeout = (double)TURN_TIMEOUT_SECONDS;
 
     char *json_message = serialize_server_your_turn(&payload);
     if (json_message)
     {
         if (send(all_players[player_idx].socket_fd, json_message, strlen(json_message), 0) == -1 ||
-            send(all_players[player_idx].socket_fd, "\n", 1, 0) == -1) // Added newline
+            send(all_players[player_idx].socket_fd, "\n", 1, 0) == -1)
         {
             perror("send your_turn or newline");
             handle_client_disconnection(&all_players[player_idx], all_players, game_board);
         }
         printf("Server: Sent 'your_turn' to %s (socket %d).\n", all_players[player_idx].username, all_players[player_idx].socket_fd);
-        free(json_message); // Free the serialized string
+        free(json_message);
     }
     else
     {
         fprintf(stderr, "Error serializing ServerYourTurnPayload\n");
     }
-    // printf("Server: Notifying player %s (socket %d) it's their turn.\n", all_players[player_idx].username, all_players[player_idx].socket_fd);
 }
 
 // Function to check and process game over condition
-int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]) // Removed total_moves_completed
+int check_and_process_game_over(PlayerState all_players[], char game_board[8][9])
 {
     int game_over_flag = 0;
     char reason[128] = "";
@@ -918,7 +897,6 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
         int score_idx = 0;
         for (int i = 0; i < MAX_CLIENTS; ++i)
         {
-            // Include players who were part of the game (had a role)
             if (all_players[i].player_role == 'R' || all_players[i].player_role == 'B')
             {
                 if (score_idx < 2)
@@ -930,14 +908,13 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
                 }
             }
         }
-        // If only one player was found (e.g. other disconnected very early), fill second score with 0 for "N/A"
         if (score_idx == 1)
         {
             strcpy(gop.scores[1].username, "N/A");
             gop.scores[1].score = 0;
         }
         else if (score_idx == 0)
-        { // Should not happen if game started
+        {
             strcpy(gop.scores[0].username, "N/A_1");
             gop.scores[0].score = 0;
             strcpy(gop.scores[1].username, "N/A_2");
@@ -952,7 +929,7 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
                 if (all_players[i].socket_fd != -1 && (all_players[i].state == P_PLAYING || all_players[i].state == P_DISCONNECTED))
                 {
                     if (send(all_players[i].socket_fd, json_game_over, strlen(json_game_over), 0) == -1 ||
-                        send(all_players[i].socket_fd, "\n", 1, 0) == -1) // Added newline
+                        send(all_players[i].socket_fd, "\n", 1, 0) == -1)
                     {
                         perror("send game_over or newline");
                     }
@@ -979,8 +956,7 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
             }
             else if (all_players[i].player_role == 'R' || all_players[i].player_role == 'B')
             {
-                // Ensure even disconnected players who had roles are reset if not already
-                all_players[i].state = P_EMPTY; // Or P_DISCONNECTED if preferred for logging
+                all_players[i].state = P_EMPTY;
                 memset(all_players[i].username, 0, MAX_USERNAME_LEN);
                 all_players[i].player_role = ' ';
             }
@@ -988,30 +964,28 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
 
         current_turn_player_index = -1;
         total_moves_made_in_game = 0;
-        consecutive_passes_server = 0; // Reset for the next game
+        consecutive_passes_server = 0;
 
         printf("Server: Game session concluded and reset.\n");
-        return 1; // Game is over
+        return 1;
     }
-    return 0; // Game continues
+    return 0;
 }
 
 // Function to switch to the next player's turn
 void switch_to_next_turn(PlayerState all_players[], char game_board[8][9])
 {
-    total_moves_made_in_game++; // A turn always advances, whether by move, pass, or timeout
+    total_moves_made_in_game++;
     printf("Server: Total moves/turns processed in game: %d. Consecutive passes: %d\n", total_moves_made_in_game, consecutive_passes_server);
 
     if (check_and_process_game_over(all_players, game_board))
     {
-        return; // Game ended, no next turn
+        return;
     }
 
     int next_player_candidate = (current_turn_player_index + 1) % MAX_CLIENTS;
     int initial_candidate = next_player_candidate;
 
-    // Find the next player who is actually in P_PLAYING state
-    // This loop prevents infinite loop if no players are P_PLAYING, but game should ideally end before that.
     do
     {
         if (all_players[next_player_candidate].state == P_PLAYING)
@@ -1022,10 +996,8 @@ void switch_to_next_turn(PlayerState all_players[], char game_board[8][9])
         next_player_candidate = (next_player_candidate + 1) % MAX_CLIENTS;
     } while (next_player_candidate != initial_candidate);
 
-    // If no playing player is found (e.g., all disconnected or game ended unexpectedly)
     fprintf(stderr, "Error: Could not find a valid next player in P_PLAYING state. Game might be stalled or over.\n");
-    current_turn_player_index = -1; // Indicate no current turn
-    // Consider ending the game here if this state is reached.
+    current_turn_player_index = -1;
 }
 
 // Function to process a move request from a client
@@ -1040,9 +1012,8 @@ void process_move_request(PlayerState *player, const char *received_json_string,
 
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
-        memcpy(nack_payload.board, game_board, sizeof(nack_payload.board)); // Current board
+        memcpy(nack_payload.board, game_board, sizeof(nack_payload.board));
 
-        // The "next_player" is the player whose turn it actually is.
         if (current_turn_player_index != -1 && all_players[current_turn_player_index].state == P_PLAYING)
         {
             strncpy(nack_payload.next_player, all_players[current_turn_player_index].username, MAX_USERNAME_LEN - 1);
@@ -1050,20 +1021,17 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         }
         else
         {
-            // Should not happen if game is ongoing, but as a fallback:
             strcpy(nack_payload.next_player, "N/A");
         }
-        // Log this attempt
         log_board_and_move(game_board, player->username, 0, 0, 0, 0, "Attempted Move - Not Your Turn");
 
         char *json_response_nack = serialize_server_invalid_move(&nack_payload);
         if (json_response_nack)
         {
             if (send(player->socket_fd, json_response_nack, strlen(json_response_nack), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send invalid_move (not your turn) or newline");
-                // No disconnection here, just an error message to the offending client
             }
             free(json_response_nack);
         }
@@ -1071,45 +1039,28 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         {
             fprintf(stderr, "Error serializing ServerInvalidMovePayload for 'not your turn' for %s\n", player->username);
         }
-        return; // Do not switch turns
+        return;
     }
 
-    turn_start_time = time(NULL); // Reset turn timer
+    turn_start_time = time(NULL);
 
     ClientMovePayload move_payload;
     if (deserialize_client_move(received_json_string, &move_payload) != 0)
     {
         fprintf(stderr, "Server: Failed to deserialize move request from %s (socket %d).\n", player->username, player->socket_fd);
-        // This is a malformed message, could be grounds for an invalid_move or even disconnect.
-        // For now, let's treat as an invalid move that passes the turn.
         log_board_and_move(game_board, player->username, -1, -1, -1, -1, "Deserialization Failed Move");
 
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, game_board, sizeof(nack_payload.board));
-        // Determine next player for the message
-        int actual_next_player_idx = (current_turn_player_index + 1) % MAX_CLIENTS;
-        int i = 0;
-        do
-        {
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(nack_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                nack_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(nack_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, nack_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response_nack = serialize_server_invalid_move(&nack_payload);
         if (json_response_nack)
         {
             if (send(player->socket_fd, json_response_nack, strlen(json_response_nack), 0) == -1 ||
                 send(player->socket_fd, "\n", 1, 0) == -1)
-            { // Added newline
+            {
                 perror("send invalid_move (deserialize failed) or newline");
                 handle_client_disconnection(player, all_players, game_board);
             }
@@ -1119,45 +1070,36 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         return;
     }
 
-    int r1 = move_payload.sx;
-    int c1 = move_payload.sy;
-    int r2 = move_payload.tx;
-    int c2 = move_payload.ty;
+    int r1_received = move_payload.sx;
+    int c1_received = move_payload.sy;
+    int r2_received = move_payload.tx;
+    int c2_received = move_payload.ty;
 
-    // Check for pass attempt [cite: 5]
-    if (r1 == 0 && c1 == 0 && r2 == 0 && c2 == 0)
+    int r1, c1, r2, c2;
+
+    // Check for pass attempt [cite: 5] - client sends (0,0,0,0) for pass
+    if (r1_received == 0 && c1_received == 0 && r2_received == 0 && c2_received == 0)
     {
+        printf("Server: Player %s attempts to pass (received 0,0,0,0).\n", player->username);
+        r1 = 0;
+        c1 = 0;
+        r2 = 0;
+        c2 = 0;
         log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Pass");
-        consecutive_passes_server++; // Increment for pass
+        consecutive_passes_server++;
 
         ServerMoveOkPayload ok_payload;
-        // Pass is like a move that doesn't change the board
         strcpy(ok_payload.type, "move_ok");
-        memcpy(ok_payload.board, game_board, sizeof(ok_payload.board)); // Board doesn't change on pass
+        memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
 
-        // Determine actual next player's username for the message
-        int actual_next_player_idx = current_turn_player_index; // Start with current to find next
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(ok_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                ok_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(ok_payload.next_player, "N/A"); // Should not happen
+        get_next_playing_player_username(all_players, current_turn_player_index, ok_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response = serialize_server_move_ok(&ok_payload);
         if (json_response)
         {
             if (send(player->socket_fd, json_response, strlen(json_response), 0) == -1 ||
                 send(player->socket_fd, "\n", 1, 0) == -1)
-            { // Added newline
+            {
                 perror("send move_ok (for pass) or newline");
                 handle_client_disconnection(player, all_players, game_board);
             }
@@ -1175,41 +1117,37 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         switch_to_next_turn(all_players, game_board);
         return;
     }
+    else
+    {
+        printf("Server: Player %s attempts move (received 1-indexed: %d,%d -> %d,%d).\n",
+               player->username, r1_received, c1_received, r2_received, c2_received);
+        r1 = r1_received - 1;
+        c1 = c1_received - 1;
+        r2 = r2_received - 1;
+        c2 = c2_received - 1;
+        convert_coordinates_to_zero_indexed(r1_received, c1_received, r2_received, c2_received, &r1, &c1, &r2, &c2);
+        printf("Server: Converted to 0-indexed for processing: %d,%d -> %d,%d.\n", r1, c1, r2, c2);
+    }
 
-    // Regular move
-    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move");
+    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move (0-indexed)");
     char original_board_on_invalid_move[8][9];
     memcpy(original_board_on_invalid_move, game_board, sizeof(original_board_on_invalid_move));
 
     if (validate_and_process_move(game_board, r1, c1, r2, c2, player->player_role))
     {
-        consecutive_passes_server = 0; // Reset on a successful move
-        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move");
+        consecutive_passes_server = 0;
+        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move (0-indexed)");
         ServerMoveOkPayload ok_payload;
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
 
-        int actual_next_player_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(ok_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                ok_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(ok_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, ok_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response = serialize_server_move_ok(&ok_payload);
         if (json_response)
         {
             if (send(player->socket_fd, json_response, strlen(json_response), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send move_ok or newline");
                 handle_client_disconnection(player, all_players, game_board);
@@ -1228,32 +1166,18 @@ void process_move_request(PlayerState *player, const char *received_json_string,
     }
     else
     {
-        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move");
+        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move (0-indexed)");
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, original_board_on_invalid_move, sizeof(nack_payload.board));
 
-        int actual_next_player_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            actual_next_player_idx = (actual_next_player_idx + 1) % MAX_CLIENTS;
-            if (all_players[actual_next_player_idx].state == P_PLAYING)
-            {
-                strncpy(nack_payload.next_player, all_players[actual_next_player_idx].username, MAX_USERNAME_LEN - 1);
-                nack_payload.next_player[MAX_USERNAME_LEN - 1] = '\0';
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(nack_payload.next_player, "N/A");
+        get_next_playing_player_username(all_players, current_turn_player_index, nack_payload.next_player, MAX_USERNAME_LEN);
 
         char *json_response_nack = serialize_server_invalid_move(&nack_payload);
         if (json_response_nack)
         {
             if (send(player->socket_fd, json_response_nack, strlen(json_response_nack), 0) == -1 ||
-                send(player->socket_fd, "\n", 1, 0) == -1) // Added newline
+                send(player->socket_fd, "\n", 1, 0) == -1)
             {
                 perror("send invalid_move or newline");
                 handle_client_disconnection(player, all_players, game_board);
@@ -1283,41 +1207,18 @@ void handle_turn_timeout(PlayerState all_players[], char game_board[8][9])
     PlayerState *timed_out_player = &all_players[current_turn_player_index];
     printf("Server: Player %s (socket %d) timed out.\n", timed_out_player->username, timed_out_player->socket_fd);
     log_board_and_move(game_board, timed_out_player->username, -1, -1, -1, -1, "Timeout Pass");
-    consecutive_passes_server++; // Increment for timeout pass
+    consecutive_passes_server++;
 
     ServerPassPayload pass_payload;
     strcpy(pass_payload.type, "pass");
 
-    // Determine next player's username
-    int next_player_idx = (current_turn_player_index + 1) % MAX_CLIENTS;
-    if (all_players[next_player_idx].state == P_PLAYING)
-    {
-        strcpy(pass_payload.next_player, all_players[next_player_idx].username);
-    }
-    else
-    {
-        // Find the actual next playing player for the message
-        int temp_next_idx = current_turn_player_index;
-        int i = 0;
-        do
-        {
-            temp_next_idx = (temp_next_idx + 1) % MAX_CLIENTS;
-            if (all_players[temp_next_idx].state == P_PLAYING)
-            {
-                strcpy(pass_payload.next_player, all_players[temp_next_idx].username);
-                break;
-            }
-            i++;
-        } while (i < MAX_CLIENTS);
-        if (i == MAX_CLIENTS)
-            strcpy(pass_payload.next_player, "N/A"); // Should not happen
-    }
+    get_next_playing_player_username(all_players, current_turn_player_index, pass_payload.next_player, MAX_USERNAME_LEN);
 
     char *json_response = serialize_server_pass(&pass_payload);
     if (json_response)
     {
         if (send(timed_out_player->socket_fd, json_response, strlen(json_response), 0) == -1 ||
-            send(timed_out_player->socket_fd, "\n", 1, 0) == -1) // Added newline
+            send(timed_out_player->socket_fd, "\n", 1, 0) == -1)
         {
             perror("send pass on timeout or newline");
             handle_client_disconnection(timed_out_player, all_players, game_board);
@@ -1341,7 +1242,7 @@ void initialize_player_states(PlayerState all_players[])
 {
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
-        all_players[i].socket_fd = -1; // Indicates slot is empty
+        all_players[i].socket_fd = -1;
         all_players[i].state = P_EMPTY;
         memset(all_players[i].username, 0, MAX_USERNAME_LEN);
         all_players[i].player_role = ' ';
@@ -1359,9 +1260,9 @@ int initialize_server_socket(const char *port)
     int rv;
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC; // AF_INET or AF_INET6 to force version
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
+    hints.ai_flags = AI_PASSIVE;
 
     if ((rv = getaddrinfo(NULL, port, &hints, &servinfo)) != 0)
     {
@@ -1379,9 +1280,9 @@ int initialize_server_socket(const char *port)
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
         {
             perror("setsockopt");
-            close(sockfd);          // Close the socket if setsockopt fails
-            freeaddrinfo(servinfo); // Free the servinfo list
-            return -1;              // Return error
+            close(sockfd);
+            freeaddrinfo(servinfo);
+            return -1;
         }
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
         {
@@ -1403,8 +1304,8 @@ int initialize_server_socket(const char *port)
     if (listen(sockfd, LISTEN_BACKLOG) == -1)
     {
         perror("listen");
-        close(sockfd); // Close the socket if listen fails
-        return -1;     // Return error
+        close(sockfd);
+        return -1;
     }
     return sockfd;
 }
@@ -1437,7 +1338,6 @@ void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen
             return;
         }
     }
-    // Should not happen if num_clients check is done before calling add_player
     fprintf(stderr, "Error: Tried to add player but no empty slots (this should not happen).\n");
     close(client_socket);
 }
@@ -1448,9 +1348,6 @@ void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int
     if (player_to_remove->socket_fd != -1)
     {
         printf("Server: Closing connection for socket %d (username: %s)\n", player_to_remove->socket_fd, player_to_remove->username[0] ? player_to_remove->username : "N/A");
-
-        // Removed logic for advancing turn if current player disconnects.
-        // This is now handled by handle_client_disconnection.
 
         close(player_to_remove->socket_fd);
         FD_CLR(player_to_remove->socket_fd, &master_fds);
@@ -1464,7 +1361,7 @@ void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int
         }
 
         player_to_remove->socket_fd = -1;
-        player_to_remove->state = P_DISCONNECTED; // Or P_EMPTY
+        player_to_remove->state = P_DISCONNECTED;
         memset(player_to_remove->username, 0, MAX_USERNAME_LEN);
         player_to_remove->player_role = ' ';
 
@@ -1491,7 +1388,6 @@ void accept_new_connection(int current_listener_fd, PlayerState all_players[], i
     if (*current_num_clients >= MAX_CLIENTS)
     {
         fprintf(stderr, "Server: Maximum clients reached. Rejecting new connection from socket %d.\n", new_fd);
-        // TODO: Optionally send a "server full" message to the client
         const char *msg = "Server is full. Try again later.\n";
         send(new_fd, msg, strlen(msg), 0);
         close(new_fd);
@@ -1517,11 +1413,11 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
     char disconnected_username_copy[MAX_USERNAME_LEN];
     strncpy(disconnected_username_copy, disconnected_player->username, MAX_USERNAME_LEN - 1);
     disconnected_username_copy[MAX_USERNAME_LEN - 1] = '\0';
-    char disconnected_player_role = disconnected_player->player_role; // Store role before reset
+    char disconnected_player_role = disconnected_player->player_role;
 
     int game_was_active_with_two_players = 0;
     if (current_turn_player_index != -1)
-    { // Game is considered active if a turn is assigned
+    {
         int playing_count = 0;
         for (int i = 0; i < MAX_CLIENTS; ++i)
         {
@@ -1543,31 +1439,23 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
     }
 
     ClientConnectionState old_state = disconnected_player->state;
-    remove_player(disconnected_player, all_players, &num_clients, &num_registered_players); // disconnected_player state is now P_DISCONNECTED or P_EMPTY
+    remove_player(disconnected_player, all_players, &num_clients, &num_registered_players);
 
     if (old_state == P_PLAYING && game_was_active_with_two_players)
-    { // Player was playing in an active game
+    {
         if (num_registered_players == 1)
-        { // One player remains registered and playing
+        {
             printf("Server: Player %s (role %c) disconnected. Game continues with remaining player.\n",
                    disconnected_username_copy, disconnected_player_role);
 
-            // If it was the disconnected player's turn, they auto-pass.
             if (disconnected_player_slot == current_turn_player_index)
             {
                 log_board_and_move(game_board, disconnected_username_copy, -1, -1, -1, -1, "Disconnect Pass");
                 consecutive_passes_server++;
-                // current_turn_player_index remains the slot of the (now) disconnected player for context of this pass
-                // switch_to_next_turn will handle advancing from this "passed" turn.
                 switch_to_next_turn(all_players, game_board);
             }
             else
             {
-                // It was not the disconnected player's turn. Game proceeds.
-                // The current_turn_player_index is still the other active player.
-                // When it eventually becomes the disconnected player's turn slot,
-                // start_player_turn will handle it as an auto-pass.
-                // No immediate action on turn needed here, but check if game ends due to this disconnect
                 if (check_and_process_game_over(all_players, game_board))
                 {
                     return;
@@ -1575,20 +1463,16 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
             }
         }
         else if (num_registered_players == 0)
-        { // Both players (or last playing player) disconnected
+        {
             printf("Server: Last playing player %s disconnected or both players disconnected from an active game. Resetting.\n", disconnected_username_copy);
             current_turn_player_index = -1;
             total_moves_made_in_game = 0;
             consecutive_passes_server = 0;
-            // Game is over, no one to send to. Board reset happens if new game starts.
-            // check_and_process_game_over might have already run if called by switch_to_next_turn from the other player disconnecting.
-            // Explicitly call it here if not already handled, to clean up board state for logging if needed, though players are gone.
             check_and_process_game_over(all_players, game_board);
         }
     }
     else if (num_registered_players == 0)
     {
-        // Game wasn't active or already over, and last client(s) left.
         printf("Server: All clients disconnected or game was not fully active. Server idle or reset.\n");
         current_turn_player_index = -1;
         total_moves_made_in_game = 0;
@@ -1599,7 +1483,7 @@ void handle_client_disconnection(PlayerState *disconnected_player, PlayerState a
 // Function to handle messages from a client
 void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players, char game_board[8][9])
 {
-    char buf[BUFFER_SIZE]; // Temporary buffer for recv
+    char buf[BUFFER_SIZE];
     int nbytes = recv(player->socket_fd, buf, sizeof(buf) - 1, 0);
 
     if (nbytes <= 0)
@@ -1628,9 +1512,8 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
     // Append new data to player's persistent buffer
     memcpy(player->recv_buffer + player->recv_buffer_len, buf, nbytes);
     player->recv_buffer_len += nbytes;
-    player->recv_buffer[player->recv_buffer_len] = '\0'; // Null-terminate for strchr
+    player->recv_buffer[player->recv_buffer_len] = '\0';
 
-    // Process all complete newline-terminated messages in the buffer
     char *current_pos = player->recv_buffer;
     char *newline_ptr;
     while ((newline_ptr = strchr(current_pos, '\n')) != NULL)
@@ -1643,13 +1526,12 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
         printf("Server: Processing message from socket %d (username: %s): %s\n",
                player->socket_fd, player->username[0] ? player->username : "N/A", json_message);
 
-        player->last_message_time = time(NULL); // Update activity time
+        player->last_message_time = time(NULL);
 
         const char *msg_type_const = get_message_type_from_json(json_message);
         if (msg_type_const == NULL)
         {
             fprintf(stderr, "Server: Could not determine message type from: %s. Player: %s\n", json_message, player->username);
-            // Decide if to skip or disconnect. For now, skip to next potential message.
         }
         else
         {
@@ -1667,29 +1549,25 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
                 else
                 {
                     fprintf(stderr, "Server: Move received from %s but not their turn or not playing.\n", player->username);
-                    // Optionally send an error message back
                 }
             }
             else
             {
                 fprintf(stderr, "Server: Unknown message type '%s' from %s.\n", msg_type_const, player->username);
-                // Optionally send an error to client
             }
-            free((void *)msg_type_const); // Free the string returned by get_message_type_from_json
+            free((void *)msg_type_const);
         }
 
-        // Move to the character after the processed newline
         current_pos = newline_ptr + 1;
     }
 
-    // Shift remaining partial message (if any) to the beginning of the buffer
     int remaining_len = player->recv_buffer_len - (current_pos - player->recv_buffer);
     if (remaining_len > 0 && current_pos != player->recv_buffer)
     {
         memmove(player->recv_buffer, current_pos, remaining_len);
     }
     player->recv_buffer_len = remaining_len;
-    player->recv_buffer[player->recv_buffer_len] = '\0'; // Null-terminate the potentially shifted buffer
+    player->recv_buffer[player->recv_buffer_len] = '\0';
 }
 
 int main(int argc, char *argv[])
@@ -1712,51 +1590,36 @@ int main(int argc, char *argv[])
 
     printf("Server: Listening on port %s...\n", port);
 
-    // Example: Initialize board (replace with your actual game start board)
     for (int i = 0; i < 8; i++)
     {
         for (int j = 0; j < 8; j++)
         {
-            octaflip_board[i][j] = '.'; // Empty
+            octaflip_board[i][j] = '.';
         }
-        octaflip_board[i][8] = '\0'; // Null terminate rows
+        octaflip_board[i][8] = '\0';
     }
-
-    // --- Game Start Simulation (for testing turn logic) ---
-    // This would normally happen after two players register and are ready.
-    // For now, let's assume players[0] and players[1] will be 'R' and 'B'
-    // and the game starts immediately if they connect.
-    // This is a placeholder for actual game start logic.
-    // if (num_registered_players == MAX_CLIENTS) { // Or some other condition
-    //    players[0].player_role = 'R'; players[0].state = P_PLAYING;
-    //    players[1].player_role = 'B'; players[1].state = P_PLAYING;
-    //    current_turn_player_index = 0; // Player R starts
-    //    start_player_turn(players, current_turn_player_index, octaflip_board);
-    // }
-    // --- End Game Start Simulation ---
 
     while (1)
     {
-        read_fds = master_fds; // Copy it
+        read_fds = master_fds;
         struct timeval tv;
-        tv.tv_sec = 1; // 1-second timeout for select
+        tv.tv_sec = 1; // Check for timeouts roughly every second
         tv.tv_usec = 0;
 
         int activity = select(fd_max + 1, &read_fds, NULL, NULL, &tv);
 
-        if (activity == -1)
+        if (activity < 0) // select error
         {
             if (errno == EINTR)
             { // Interrupted by signal, continue
                 continue;
             }
             perror("select");
-            // Consider more robust error handling
+            // Consider more robust error handling or graceful shutdown
             exit(4);
         }
 
-        // Check for turn timeout if select timed out or even if there was activity
-        // This check should happen regardless of 'activity > 0' if a game is in progress
+        // Check for turn timeout if a game is in progress
         if (current_turn_player_index != -1 && players[current_turn_player_index].state == P_PLAYING)
         {
             if (time(NULL) - turn_start_time >= TURN_TIMEOUT_SECONDS)
@@ -1765,19 +1628,19 @@ int main(int argc, char *argv[])
             }
         }
 
-        // Run through the existing connections looking for data to read
+        // Iterate through existing connections looking for data to read or new connections
         for (int i = 0; i <= fd_max; i++)
         {
             if (FD_ISSET(i, &read_fds))
             {
                 if (i == listener_fd)
                 {
-                    // Handle new connections
+                    // Handle new connection
                     accept_new_connection(listener_fd, players, &num_clients);
                 }
                 else
                 {
-                    // Handle data from a client
+                    // Handle data from an existing client
                     PlayerState *current_player = NULL;
                     for (int j = 0; j < MAX_CLIENTS; j++)
                     {
@@ -1791,23 +1654,13 @@ int main(int argc, char *argv[])
                     {
                         handle_client_message(current_player, players, &num_clients, &num_registered_players, octaflip_board);
                     }
-                    else
-                    {
-                        // This should ideally not happen if fd_sets are managed correctly
-                        fprintf(stderr, "Warning: Activity on unmanaged socket %d\n", i);
-                        FD_CLR(i, &master_fds); // Remove from master set if it's an anomaly
-                    }
                 }
             }
         }
-        // TODO: Add timeout checks for players if necessary
-        // (e.g., iterate players, check time(NULL) - player.last_message_time > TIMEOUT_SECONDS)
-        // if timeout, call remove_player()
     }
 
-    // Cleanup (though this loop runs forever in this basic setup)
+    // Cleanup (currently unreachable in this infinite loop)
     close(listener_fd);
-    // TODO: Close all client sockets if any remain
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
         if (players[i].socket_fd != -1)

@@ -5,20 +5,18 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <sys/select.h> // For select()
-#include <errno.h>      // For EINTR
-#include "protocol.h"   // Include the protocol header
-#include "cJSON.h"      // Assuming cJSON library is used for JSON parsing/generation.
-// You would need to link against cJSON, e.g., gcc client.c cJSON.c -o client -lm
+#include <sys/select.h>
+#include <errno.h>
+#include "protocol.h"
+#include "cJSON.h"
 
 #define BUFFER_SIZE 2048
-#define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2) // Max size for client's receive buffer
+#define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2)
 
 char client_username[MAX_USERNAME_LEN];
-// int my_turn = 0; // No longer needed for autonomous client
-char my_player_symbol = ' ';                         // Stores 'R' or 'B' for this client
-char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN]; // Persistent buffer for incoming messages
-int client_recv_buffer_len = 0;                      // Current length of data in client_recv_buffer
+char my_player_symbol = ' ';
+char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN];
+int client_recv_buffer_len = 0;
 
 typedef struct
 {
@@ -52,18 +50,18 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
                     for (int dc = -1; dc <= 1; ++dc)
                     {
                         if (dr == 0 && dc == 0)
-                            continue; // Skip self
+                            continue;
 
                         int r_dest = r_src + dr;
                         int c_dest = c_src + dc;
 
                         if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
                         {
-                            move.sx = r_src;
-                            move.sy = c_src;
-                            move.tx = r_dest;
-                            move.ty = c_dest;
-                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            move.sx = r_src + 1;
+                            move.sy = c_src + 1;
+                            move.tx = r_dest + 1;
+                            move.ty = c_dest + 1;
+                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
                             return move;
                         }
                     }
@@ -85,18 +83,18 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
                     for (int dc = -1; dc <= 1; ++dc)
                     {
                         if (dr == 0 && dc == 0)
-                            continue; // Skip self (though for 2-step it's less direct)
+                            continue;
 
                         int r_dest = r_src + 2 * dr;
                         int c_dest = c_src + 2 * dc;
 
                         if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
                         {
-                            move.sx = r_src;
-                            move.sy = c_src;
-                            move.tx = r_dest;
-                            move.ty = c_dest;
-                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", r_src, c_src, r_dest, c_dest);
+                            move.sx = r_src + 1;
+                            move.sy = c_src + 1;
+                            move.tx = r_dest + 1;
+                            move.ty = c_dest + 1;
+                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
                             return move;
                         }
                     }
@@ -105,7 +103,7 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
         }
     }
 
-    // If no valid moves found, pass
+    // If no valid moves found, pass (0,0,0,0 indicates pass)
     printf("Client AI: No valid moves found. Passing.\n");
     move.sx = 0;
     move.sy = 0;
@@ -117,7 +115,6 @@ MoveCoords move_generate(char current_board[8][9], char player_symbol)
 // JSON Utility Function Implementations (Client-side)
 
 // Helper function to get message type from JSON
-// Returns a strdup'd string that the caller must free, or NULL on error.
 char *get_message_type_from_json(const char *json_string)
 {
     cJSON *root = cJSON_Parse(json_string);
@@ -164,14 +161,12 @@ char *serialize_client_register(const ClientRegisterPayload *payload)
 
     char *json_string = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    return json_string; // Caller must free this string
+    return json_string;
 }
 
 // Deserialization for ServerRegisterAckPayload
 int deserialize_server_register_ack(const char *json_string, ServerRegisterAckPayload *out_payload)
 {
-    // For register_ack, type is sufficient. If payload had fields, parse them here.
-    // This function primarily validates the type for now.
     cJSON *root = cJSON_Parse(json_string);
     if (root == NULL)
         return -1;
@@ -256,40 +251,6 @@ int deserialize_server_game_start(const char *json_string, ServerGameStartPayloa
     }
     strncpy(out_payload->first_player, first_player_json->valuestring, MAX_USERNAME_LEN - 1);
     out_payload->first_player[MAX_USERNAME_LEN - 1] = '\0';
-
-    // The initial_board field is no longer sent by the server in game_start as per [cite: 8]
-    // If the struct still has it, we can just not populate it or ignore it.
-    // For robustness, if the server *might* send it (e.g. older version),
-    // we can try to parse it but not rely on it.
-    // However, based on the prompt, we should assume it's NOT there.
-    // So, the parsing logic for initial_board in this function can be removed or commented out.
-    /*
-    cJSON *board_json = cJSON_GetObjectItemCaseSensitive(root, "initial_board");
-    if (!cJSON_IsArray(board_json) || cJSON_GetArraySize(board_json) != 8)
-    {
-        // If initial_board is truly optional or not sent, this check might be too strict.
-        // For now, assuming it's not sent, so this block is effectively skipped.
-        // If it were critical and missing, one might cJSON_Delete(root); return -1;
-    } else {
-        for (int i = 0; i < 8; ++i)
-        {
-            cJSON *row_json = cJSON_GetArrayItem(board_json, i);
-            if (!cJSON_IsString(row_json) || (row_json->valuestring == NULL))
-            {
-                cJSON_Delete(root);
-                return -1;
-            }
-            strncpy(out_payload->initial_board[i], row_json->valuestring, 8); // Board rows are 8 chars + null
-            out_payload->initial_board[i][8] = '\0';
-        }
-    }
-    */
-    // Initialize initial_board to empty or a known state if it's part of the struct but not sent
-    // for (int i = 0; i < 8; ++i)
-    // {
-    //     memset(out_payload->initial_board[i], '.', 8); // Fill with dots
-    //     out_payload->initial_board[i][8] = '\0';       // Null-terminate
-    // }
 
     cJSON_Delete(root);
     return 0;
@@ -466,7 +427,7 @@ int deserialize_server_invalid_move(const char *json_string, ServerInvalidMovePa
     }
     else
     {
-        out_payload->reason[0] = '\0'; // No reason provided or not a string
+        out_payload->reason[0] = '\0';
     }
 
     cJSON_Delete(root);
@@ -516,33 +477,42 @@ int deserialize_server_game_over(const char *json_string, ServerGameOverPayload 
     }
     strcpy(out_payload->type, "game_over");
 
-    cJSON *scores_json = cJSON_GetObjectItemCaseSensitive(root, "scores");
-    if (!cJSON_IsArray(scores_json) || cJSON_GetArraySize(scores_json) != 2)
+    cJSON *scores_obj_json = cJSON_GetObjectItemCaseSensitive(root, "scores");
+    if (!cJSON_IsObject(scores_obj_json))
     {
         cJSON_Delete(root);
         return -1;
     }
 
-    for (int i = 0; i < 2; ++i)
+    int score_idx = 0;
+    cJSON *current_score_item = NULL;
+    cJSON_ArrayForEach(current_score_item, scores_obj_json)
     {
-        cJSON *score_item_json = cJSON_GetArrayItem(scores_json, i);
-        if (!cJSON_IsObject(score_item_json))
+        if (score_idx < 2)
         {
-            cJSON_Delete(root);
-            return -1;
+            if (current_score_item->string != NULL && cJSON_IsNumber(current_score_item))
+            {
+                strncpy(out_payload->scores[score_idx].username, current_score_item->string, MAX_USERNAME_LEN - 1);
+                out_payload->scores[score_idx].username[MAX_USERNAME_LEN - 1] = '\0';
+                out_payload->scores[score_idx].score = current_score_item->valueint;
+                score_idx++;
+            }
+            else
+            {
+                fprintf(stderr, "Warning: Malformed score item in game_over message.\n");
+            }
         }
-        cJSON *username_json = cJSON_GetObjectItemCaseSensitive(score_item_json, "username");
-        cJSON *score_val_json = cJSON_GetObjectItemCaseSensitive(score_item_json, "score");
+        else
+        {
+            fprintf(stderr, "Warning: More than 2 scores received in game_over message. Ignoring extras.\n");
+            break;
+        }
+    }
 
-        if (!cJSON_IsString(username_json) || username_json->valuestring == NULL ||
-            !cJSON_IsNumber(score_val_json))
-        {
-            cJSON_Delete(root);
-            return -1;
-        }
-        strncpy(out_payload->scores[i].username, username_json->valuestring, MAX_USERNAME_LEN - 1);
-        out_payload->scores[i].username[MAX_USERNAME_LEN - 1] = '\0';
-        out_payload->scores[i].score = score_val_json->valueint;
+    for (int i = score_idx; i < 2; ++i)
+    {
+        strcpy(out_payload->scores[i].username, "N/A");
+        out_payload->scores[i].score = 0;
     }
 
     cJSON_Delete(root);
@@ -566,7 +536,7 @@ void send_registration_to_server(int sockfd, const char *username)
     }
 
     if (send(sockfd, json_string, strlen(json_string), 0) < 0 ||
-        send(sockfd, "\n", 1, 0) < 0) // Added newline
+        send(sockfd, "\n", 1, 0) < 0)
     {
         perror("send registration or newline failed");
     }
@@ -624,7 +594,7 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             fprintf(stderr, "Registration failed: %s\n", nack_payload.reason);
             close(sockfd);
-            exit(1); // Or handle more gracefully
+            exit(1);
         }
         else
         {
@@ -640,18 +610,16 @@ void handle_server_message(const char *json_message, int sockfd)
             printf("Players: %s, %s\n", gs_payload.players[0], gs_payload.players[1]);
             printf("First player: %s\n", gs_payload.first_player);
 
-            // Determine client's player symbol
             if (strcmp(client_username, gs_payload.first_player) == 0)
             {
-                my_player_symbol = 'R'; // First player is 'R'
+                my_player_symbol = 'R';
             }
             else
             {
-                my_player_symbol = 'B'; // Second player is 'B'
+                my_player_symbol = 'B';
             }
             printf("Client is player %c.\n", my_player_symbol);
 
-            // Do NOT display initial board here [cite: 8]. Board comes with first 'your_turn'.
             if (strcmp(gs_payload.first_player, client_username) == 0)
             {
                 printf("It's your turn first! (Waiting for YOUR_TURN message)\n");
@@ -673,17 +641,10 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             printf("\nIt's your turn! (Automating move)\n");
             display_board(yt_payload.board);
-            // printf("You have %.1f seconds. Enter your move (sx sy tx ty): ", yt_payload.timeout); // No longer waiting for user
-            // fflush(stdout); // Ensure prompt is displayed before fgets might block
-            // my_turn = 1; // No longer needed
 
             if (my_player_symbol == ' ')
             {
                 fprintf(stderr, "Error: Player symbol not set. Cannot generate move.\n");
-                // This should not happen if game_start was processed correctly.
-                // As a fallback, could try to deduce from board, but risky.
-                // For now, send a pass if symbol is unknown.
-                MoveCoords decided_move = {0, 0, 0, 0}; // Pass
             }
 
             MoveCoords decided_move = move_generate(yt_payload.board, my_player_symbol);
@@ -691,6 +652,7 @@ void handle_server_message(const char *json_message, int sockfd)
             ClientMovePayload move_payload_to_send;
             strcpy(move_payload_to_send.type, "move");
             strcpy(move_payload_to_send.username, client_username);
+
             move_payload_to_send.sx = decided_move.sx;
             move_payload_to_send.sy = decided_move.sy;
             move_payload_to_send.tx = decided_move.tx;
@@ -699,7 +661,7 @@ void handle_server_message(const char *json_message, int sockfd)
             char *json_move_string = serialize_client_move(&move_payload_to_send);
             if (json_move_string)
             {
-                printf("Client sending move: (%d,%d) -> (%d,%d)\n",
+                printf("Client sending move to server: (%d,%d) -> (%d,%d)\n",
                        move_payload_to_send.sx, move_payload_to_send.sy,
                        move_payload_to_send.tx, move_payload_to_send.ty);
                 if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0 ||
@@ -749,12 +711,10 @@ void handle_server_message(const char *json_message, int sockfd)
             }
             else
             {
-                printf("\n"); // Newline if no specific reason from server
+                printf("\n");
             }
-            display_board(im_payload.board); // Show current board state
+            display_board(im_payload.board);
             printf("Next player: %s. It might be your turn again if server indicates.\n", im_payload.next_player);
-            // Note: The server should send 'your_turn' again if the current client needs to retry.
-            // If it's the other player's turn, this message just informs.
             if (strcmp(im_payload.next_player, client_username) != 0)
             {
                 printf("Waiting for %s to move...\n", im_payload.next_player);
@@ -791,7 +751,6 @@ void handle_server_message(const char *json_message, int sockfd)
             printf("  %s: %d\n", go_payload.scores[0].username, go_payload.scores[0].score);
             printf("  %s: %d\n", go_payload.scores[1].username, go_payload.scores[1].score);
 
-            // Determine winner based on scores
             if (go_payload.scores[0].score > go_payload.scores[1].score)
             {
                 printf("Winner: %s\n", go_payload.scores[0].username);
@@ -812,7 +771,7 @@ void handle_server_message(const char *json_message, int sockfd)
         else
         {
             fprintf(stderr, "Error deserializing game_over.\n");
-            close(sockfd); // Still exit if game_over is malformed but identified
+            close(sockfd);
             exit(1);
         }
     }
@@ -831,7 +790,7 @@ int parse_client_args(int argc, char *argv[], char **server_ip_out, char **serve
     *username_out = NULL;
 
     if (argc < 7)
-    { // Minimum: client_executable -ip IP -port PORT -username USERNAME (7 args)
+    {
         fprintf(stderr, "Usage: %s -ip <server_ip> -port <server_port> -username <username>\n", argv[0]);
         return -1;
     }
@@ -908,7 +867,7 @@ int connect_to_server(const char *server_ip, const char *server_port)
 
     // Set up socket parameters
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC; // AF_INET or AF_INET6 to force version
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
     // Resolve the IP address of the remote server using getaddrinfo
@@ -923,7 +882,7 @@ int connect_to_server(const char *server_ip, const char *server_port)
     if (sockfd == -1)
     {
         perror("socket error");
-        freeaddrinfo(res); // free the linked list
+        freeaddrinfo(res);
         return -1;
     }
 
@@ -932,11 +891,11 @@ int connect_to_server(const char *server_ip, const char *server_port)
     {
         perror("connect error");
         close(sockfd);
-        freeaddrinfo(res); // free the linked list
+        freeaddrinfo(res);
         return -1;
     }
 
-    freeaddrinfo(res); // all done with this structure
+    freeaddrinfo(res);
     return sockfd;
 }
 
@@ -944,23 +903,19 @@ int main(int argc, char *argv[])
 {
     char *server_ip;
     char *server_port;
-    char *username_from_arg; // Temporary storage for username from args
+    char *username_from_arg;
     int sockfd;
-    // char buffer[BUFFER_SIZE]; // Temp buffer for recv, data will be moved to client_recv_buffer
 
-    // Parse command-line arguments
     if (parse_client_args(argc, argv, &server_ip, &server_port, &username_from_arg) == -1)
     {
         exit(1);
     }
 
-    // Copy parsed username to global client_username
     strncpy(client_username, username_from_arg, MAX_USERNAME_LEN - 1);
     client_username[MAX_USERNAME_LEN - 1] = '\0';
 
     printf("Attempting to connect to server %s on port %s for user %s...\n", server_ip, server_port, client_username);
 
-    // Connect to the server
     sockfd = connect_to_server(server_ip, server_port);
     if (sockfd == -1)
     {
@@ -970,77 +925,47 @@ int main(int argc, char *argv[])
 
     printf("Connected to server. Socket FD: %d\n", sockfd);
 
-    // User Registration - username is now from args
     send_registration_to_server(sockfd, client_username);
 
-    // Main client loop
     fd_set read_fds;
-    // int max_fd = sockfd; // max_fd will be recalculated inside the loop
 
     while (1)
     {
         FD_ZERO(&read_fds);
-        // Only listen to STDIN if it's our turn, to avoid consuming other input
-        // or to allow a "quit" command etc. in the future.
-        // For now, strictly only when my_turn = 1.
-        // if (my_turn) // STDIN handling removed for autonomous client
-        // {
-        //     FD_SET(STDIN_FILENO, &read_fds);
-        // }
-        FD_SET(sockfd, &read_fds); // For messages from server
+        FD_SET(sockfd, &read_fds);
 
-        // Adjust max_fd if STDIN_FILENO is included
         int current_max_fd = sockfd;
-        // if (my_turn && STDIN_FILENO > sockfd) // STDIN handling removed
-        // {
-        //     current_max_fd = STDIN_FILENO;
-        // }
-        // else if (my_turn && STDIN_FILENO <= sockfd) // STDIN handling removed
-        // {
-        //     current_max_fd = sockfd;
-        // }
-        // else // STDIN handling removed
-        // {
-        //     current_max_fd = sockfd;
-        // }
 
-        // Wait for an activity on one of the sockets
-        // The prompt for move is now inside handle_server_message for "your_turn"
-        // So, we don't need to print it here again.
         int activity = select(current_max_fd + 1, &read_fds, NULL, NULL, NULL);
 
         if ((activity < 0) && (errno != EINTR))
         {
             perror("select error");
-            fprintf(stderr, "Disconnected from server. Exiting.\n"); // More specific error context
+            fprintf(stderr, "Disconnected from server. Exiting.\n");
             close(sockfd);
             exit(1);
         }
 
-        // If something happened on the server socket, then it's an incoming message
         if (FD_ISSET(sockfd, &read_fds))
         {
-            char temp_buf[BUFFER_SIZE]; // Temporary buffer for recv
+            char temp_buf[BUFFER_SIZE];
             int bytes_received = recv(sockfd, temp_buf, sizeof(temp_buf) - 1, 0);
             if (bytes_received > 0)
             {
                 temp_buf[bytes_received] = '\0';
 
-                // Append to persistent buffer
                 if (client_recv_buffer_len + bytes_received >= CLIENT_RECV_BUFFER_MAX_LEN)
                 {
                     fprintf(stderr, "Client receive buffer overflow. Discarding data.\n");
-                    // Potentially disconnect or handle error more gracefully
-                    client_recv_buffer_len = 0; // Clear buffer to prevent further issues
+                    client_recv_buffer_len = 0;
                 }
                 else
                 {
                     memcpy(client_recv_buffer + client_recv_buffer_len, temp_buf, bytes_received);
                     client_recv_buffer_len += bytes_received;
-                    client_recv_buffer[client_recv_buffer_len] = '\0'; // Null-terminate combined buffer
+                    client_recv_buffer[client_recv_buffer_len] = '\0';
                 }
 
-                // Process all complete newline-terminated messages in the buffer
                 char *current_pos = client_recv_buffer;
                 char *newline_ptr;
                 while ((newline_ptr = strchr(current_pos, '\n')) != NULL)
@@ -1052,107 +977,33 @@ int main(int argc, char *argv[])
 
                     handle_server_message(single_json_message, sockfd);
 
-                    current_pos = newline_ptr + 1; // Move to start of next message
+                    current_pos = newline_ptr + 1;
                 }
 
-                // Shift remaining partial message (if any) to the beginning of the buffer
                 int remaining_len = client_recv_buffer_len - (current_pos - client_recv_buffer);
                 if (remaining_len > 0 && current_pos != client_recv_buffer)
                 {
                     memmove(client_recv_buffer, current_pos, remaining_len);
                 }
                 client_recv_buffer_len = remaining_len;
-                client_recv_buffer[client_recv_buffer_len] = '\0'; // Null-terminate shifted buffer
+                client_recv_buffer[client_recv_buffer_len] = '\0';
             }
             else if (bytes_received == 0)
             {
-                // Server closed connection
                 printf("Disconnected from server. Exiting.\n");
                 close(sockfd);
-                exit(1); // Exit with error status as server initiated close unexpectedly mid-game
+                exit(1);
             }
             else
-            { // bytes_received < 0
+            {
                 perror("recv error");
                 fprintf(stderr, "Disconnected from server. Exiting.\n");
                 close(sockfd);
                 exit(1);
             }
         }
-
-        // If something happened on stdin, it's user input for a move
-        // This block is removed as client is autonomous
-        /*
-        if (my_turn && FD_ISSET(STDIN_FILENO, &read_fds))
-        {
-            char input_buffer[100];
-            if (fgets(input_buffer, sizeof(input_buffer), stdin) != NULL)
-            {
-                int sx, sy, tx, ty;
-                // User inputs 1-indexed, server expects 0-indexed.
-                if (sscanf(input_buffer, "%d %d %d %d", &sx, &sy, &tx, &ty) == 4)
-                {
-                    // Validate range if necessary (e.g., 1-8 for user)
-                    if (sx >= 1 && sx <= 8 && sy >= 1 && sy <= 8 &&
-                        tx >= 1 && tx <= 8 && ty >= 1 && ty <= 8)
-                    {
-
-                        ClientMovePayload move_payload;
-                        strcpy(move_payload.type, "move");
-                        strcpy(move_payload.username, client_username);
-                        move_payload.sx = sx - 1; // Convert to 0-indexed
-                        move_payload.sy = sy - 1; // Convert to 0-indexed
-                        move_payload.tx = tx - 1; // Convert to 0-indexed
-                        move_payload.ty = ty - 1; // Convert to 0-indexed
-
-                        char *json_move_string = serialize_client_move(&move_payload);
-                        if (json_move_string)
-                        {
-                            if (send(sockfd, json_move_string, strlen(json_move_string), 0) < 0 ||
-                                send(sockfd, "\n", 1, 0) < 0) // Added newline
-                            {
-                                perror("send move or newline failed");
-                            }
-                            else
-                            {
-                                printf("Move (%d,%d) to (%d,%d) sent.\n", sx, sy, tx, ty);
-                            }
-                            free(json_move_string);
-                        }
-                        else
-                        {
-                            fprintf(stderr, "Error serializing move message.\n");
-                        }
-                        my_turn = 0; // Reset flag, wait for server response (move_ok/invalid_move) then next turn
-                    }
-                    else
-                    {
-                        printf("Invalid input: Coordinates must be between 1 and 8. Please enter sx sy tx ty (e.g., 1 1 2 2).\n");
-                        // Reprint prompt if needed, or rely on next "your_turn" if server resends on invalid client input.
-                        // For now, just inform and wait. The prompt is sticky from the your_turn message.
-                        printf("Enter your move (sx sy tx ty): ");
-                        fflush(stdout);
-                    }
-                }
-                else
-                {
-                    printf("Invalid input format. Please enter sx sy tx ty (e.g., 1 1 2 2).\n");
-                    // Reprint prompt
-                    printf("Enter your move (sx sy tx ty): ");
-                    fflush(stdout);
-                }
-            }
-            else
-            {
-                // fgets failed, potentially EOF on stdin
-                printf("Input error or EOF detected on stdin.\n");
-                my_turn = 0; // Stop trying to read from stdin in this state
-            }
-        }
-        */
     }
 
-    // This part should ideally not be reached if game_over or disconnection is handled properly
     printf("Closing connection (unexpected exit from loop).\n");
     close(sockfd);
 
