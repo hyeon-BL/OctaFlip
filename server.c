@@ -443,7 +443,7 @@ void log_board_and_move(char current_board[8][9], const char *player_username, i
     }
     else
     {
-        printf("  Move: (%d,%d) -> (%d,%d)\n", sx, sy, tx, ty);
+        printf("  Move: (%d,%d) -> (%d,%d)\n", sx + 1, sy + 1, tx + 1, ty + 1); // Convert to 1-indexed for display
         printf("  Status: %s\n", move_type_or_status);
     }
     printf("  Board State:\n");
@@ -1126,17 +1126,16 @@ void process_move_request(PlayerState *player, const char *received_json_string,
         r2 = r2_received - 1;
         c2 = c2_received - 1;
         convert_coordinates_to_zero_indexed(r1_received, c1_received, r2_received, c2_received, &r1, &c1, &r2, &c2);
-        printf("Server: Converted to 0-indexed for processing: %d,%d -> %d,%d.\n", r1, c1, r2, c2);
     }
 
-    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move (0-indexed)");
+    log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Attempted Move");
     char original_board_on_invalid_move[8][9];
     memcpy(original_board_on_invalid_move, game_board, sizeof(original_board_on_invalid_move));
 
     if (validate_and_process_move(game_board, r1, c1, r2, c2, player->player_role))
     {
         consecutive_passes_server = 0;
-        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move (0-indexed)");
+        log_board_and_move(game_board, player->username, r1, c1, r2, c2, "Valid Move");
         ServerMoveOkPayload ok_payload;
         strcpy(ok_payload.type, "move_ok");
         memcpy(ok_payload.board, game_board, sizeof(ok_payload.board));
@@ -1166,7 +1165,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
     }
     else
     {
-        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move (0-indexed)");
+        log_board_and_move(original_board_on_invalid_move, player->username, r1, c1, r2, c2, "Invalid Move");
         ServerInvalidMovePayload nack_payload;
         strcpy(nack_payload.type, "invalid_move");
         memcpy(nack_payload.board, original_board_on_invalid_move, sizeof(nack_payload.board));
@@ -1523,8 +1522,8 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
         strncpy(json_message, current_pos, message_len);
         json_message[message_len] = '\0';
 
-        printf("Server: Processing message from socket %d (username: %s): %s\n",
-               player->socket_fd, player->username[0] ? player->username : "N/A", json_message);
+        printf("Server: Processing message from socket %d: %s\n",
+               player->socket_fd, json_message);
 
         player->last_message_time = time(NULL);
 
