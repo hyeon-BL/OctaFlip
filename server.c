@@ -40,17 +40,13 @@ typedef struct
     socklen_t addr_len;
     char player_role; // 'R' or 'B'
     time_t last_message_time;
-    char recv_buffer[PLAYER_RECV_BUFFER_MAX_LEN];
-    int recv_buffer_len;
-    // Add a flag to indicate if this slot is part of an ongoing or resumable game
-    int is_game_participant;
+    char recv_buffer[PLAYER_RECV_BUFFER_MAX_LEN]; // Buffer for incoming messages
+    int recv_buffer_len;                          // Current length of data in recv_buffer
 } PlayerState;
 
 // Global variables
 PlayerState players[MAX_CLIENTS];
-int num_clients = 0; // Count of active socket connections
-// num_registered_players will now count players in P_REGISTERED or P_PLAYING state.
-// For checking server full, we'll use a helper function.
+int num_clients = 0;
 int num_registered_players = 0;
 char octaflip_board[8][9];          // Game board
 int current_turn_player_index = -1; // Index in the 'players' array
@@ -66,10 +62,10 @@ int fd_max;        // Maximum file descriptor number
 // Forward declarations
 void initialize_player_states(PlayerState all_players[]);
 int initialize_server_socket(const char *port);
-void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen_t addr_len, PlayerState all_players[], int *current_num_clients_ptr);
-void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int *current_num_clients_ptr, int *current_total_registered_players_ptr);
+void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen_t addr_len, PlayerState all_players[], int *current_num_clients);
+void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players);
 void accept_new_connection(int current_listener_fd, PlayerState all_players[], int *current_num_clients);
-void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients_ptr, int *current_total_registered_players_ptr, char game_board[8][9]);
+void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players, char game_board[8][9]);
 void process_move_request(PlayerState *player, const char *received_json_string, PlayerState all_players[], char game_board[8][9]);
 void handle_turn_timeout(PlayerState all_players[], char game_board[8][9]);
 void start_player_turn(PlayerState all_players[], int player_idx, char game_board[8][9]);
@@ -77,23 +73,8 @@ void switch_to_next_turn(PlayerState all_players[], char game_board[8][9]);
 int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]);
 void handle_client_disconnection(PlayerState *disconnected_player, PlayerState all_players[], char game_board[8][9]);
 int count_player_pieces_on_board(char board[8][9], char player_symbol);
-void attempt_game_start(PlayerState players_arr[], int current_registered_count, char game_board[8][9]);
+void attempt_game_start(PlayerState players[], int current_registered_count, char game_board[8][9]);
 void log_board_and_move(char current_board[8][9], const char *player_username, int sx, int sy, int tx, int ty, const char *move_type_or_status);
-static void send_register_ack(PlayerState *player);
-static void send_register_nack(PlayerState *player, const char *reason_str);
-
-// Helper to count occupied game slots (P_REGISTERED, P_PLAYING, or P_DISCONNECTED from a game)
-static int get_occupied_game_slots(PlayerState all_players[]) {
-    int count = 0;
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (all_players[i].state == P_REGISTERED ||
-            all_players[i].state == P_PLAYING ||
-            (all_players[i].state == P_DISCONNECTED && all_players[i].is_game_participant)) {
-            count++;
-        }
-    }
-    return count;
-}
 
 // Helper to get the username of the next playing player
 // Returns 1 if found and populates out_username, 0 otherwise.
@@ -451,20 +432,18 @@ void log_board_and_move(char current_board[8][9], const char *player_username, i
 {
     printf("Server Log:\n");
     printf("  Player: %s\n", player_username ? player_username : "N/A");
-    if (sx == -1 && sy == -1 && tx == -1 && ty == -1) // General status or pass
+    if (sx == -1 && sy == -1 && tx == -1 && ty == -1)
     {
         printf("  Action: %s\n", move_type_or_status);
     }
-    else if (sx == 0 && sy == 0 && tx == 0 && ty == 0 &&
-             (strstr(move_type_or_status, "Pass") != NULL)) // Explicit pass move
+    else if (sx == 0 && sy == 0 && tx == 0 && ty == 0 && (strcmp(move_type_or_status, "Attempted Pass") == 0 || strcmp(move_type_or_status, "Valid Pass") == 0))
     {
         printf("  Move: Pass\n");
         printf("  Status: %s\n", move_type_or_status);
     }
-    else // Regular move
+    else
     {
-        printf("  Move (0-indexed): (%d,%d) -> (%d,%d)\n", sx, sy, tx, ty);
-        printf("  Displayed Move (1-indexed): (%d,%d) -> (%d,%d)\n", sx + 1, sy + 1, tx + 1, ty + 1);
+        printf("  Move: (%d,%d) -> (%d,%d)\n", sx + 1, sy + 1, tx + 1, ty + 1); // Convert to 1-indexed for display
         printf("  Status: %s\n", move_type_or_status);
     }
     printf("  Board State:\n");
@@ -486,11 +465,11 @@ void convert_coordinates_to_zero_indexed(int r1_received, int c1_received, int r
     *c2 = c2_received - 1;
 }
 
-void attempt_game_start(PlayerState all_players[], int current_players_ready_count, char game_board[8][9])
+void attempt_game_start(PlayerState all_players[], int current_num_registered_players_val, char game_board[8][9])
 {
-    if (current_players_ready_count == MAX_CLIENTS && current_turn_player_index == -1)
+    if (current_num_registered_players_val == MAX_CLIENTS && current_turn_player_index == -1)
     {
-        printf("Server: Two players ready. Attempting to start game.\n");
+        printf("Server: Two players registered. Attempting to start game.\n");
 
         for (int r = 0; r < 8; r++)
         {
@@ -512,7 +491,6 @@ void attempt_game_start(PlayerState all_players[], int current_players_ready_cou
             if (all_players[k].state == P_REGISTERED)
             {
                 all_players[k].state = P_PLAYING;
-                all_players[k].is_game_participant = 1; // Mark as participant
                 all_players[k].player_role = (players_assigned_role == 0) ? 'R' : 'B'; // first player 'R', second player 'B'
                 if (players_assigned_role == 0)
                 {
@@ -597,114 +575,186 @@ void attempt_game_start(PlayerState all_players[], int current_players_ready_cou
     }
 }
 
-void process_registration_request(PlayerState *new_connection_player_state_obj, const char *received_json_string, PlayerState all_players[], char game_board[8][9])
+void process_registration_request(PlayerState *player, const char *received_json_string, PlayerState all_players[], int *current_num_registered_players, char game_board[8][9])
 {
     ClientRegisterPayload reg_payload;
-    if (deserialize_client_register(received_json_string, &reg_payload) != 0) {
-        fprintf(stderr, "Server: Failed to deserialize register request from socket %d.\n", new_connection_player_state_obj->socket_fd);
-        send_register_nack(new_connection_player_state_obj, "Malformed registration request.");
+    if (deserialize_client_register(received_json_string, &reg_payload) != 0)
+    {
+        fprintf(stderr, "Server: Failed to deserialize register request from socket %d.\n", player->socket_fd);
         return;
     }
 
-    if (new_connection_player_state_obj->state != P_CONNECTED) {
-        fprintf(stderr, "Server: Player (socket %d) attempted to register but not in P_CONNECTED state (current state: %d).\n", new_connection_player_state_obj->socket_fd, new_connection_player_state_obj->state);
-        send_register_nack(new_connection_player_state_obj, "Invalid state for registration.");
-        return;
-    }
-
-    if (strlen(reg_payload.username) == 0) {
-        send_register_nack(new_connection_player_state_obj, "Username cannot be empty.");
-        return;
-    }
-     if (strlen(reg_payload.username) >= MAX_USERNAME_LEN) {
-        send_register_nack(new_connection_player_state_obj, "Username too long.");
-        return;
-    }
-
-    // Check for reconnection or existing username
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
-        if (strcmp(all_players[i].username, reg_payload.username) == 0) {
-            if (all_players[i].state == P_DISCONNECTED && all_players[i].is_game_participant) {
-                // Reconnection
-                printf("Server: Player %s attempting to reconnect.\n", reg_payload.username);
-                all_players[i].socket_fd = new_connection_player_state_obj->socket_fd;
-                all_players[i].address = new_connection_player_state_obj->address;
-                all_players[i].addr_len = new_connection_player_state_obj->addr_len;
-                all_players[i].last_message_time = time(NULL);
-                all_players[i].state = P_PLAYING; // Assume they were playing
-                // Transfer recv_buffer content if any (though unlikely for a fresh reconnect)
-                memcpy(all_players[i].recv_buffer, new_connection_player_state_obj->recv_buffer, new_connection_player_state_obj->recv_buffer_len);
-                all_players[i].recv_buffer_len = new_connection_player_state_obj->recv_buffer_len;
-                all_players[i].recv_buffer[all_players[i].recv_buffer_len] = '\0';
-
-
-                // The new_connection_player_state_obj slot is now merged into all_players[i]
-                // Mark the original slot of new_connection_player_state_obj as empty if it's not players[i]
-                if (&all_players[i] != new_connection_player_state_obj) {
-                    new_connection_player_state_obj->socket_fd = -1;
-                    new_connection_player_state_obj->state = P_EMPTY;
-                    memset(new_connection_player_state_obj->username, 0, MAX_USERNAME_LEN);
-                    new_connection_player_state_obj->player_role = ' ';
-                    new_connection_player_state_obj->is_game_participant = 0;
-                    new_connection_player_state_obj->recv_buffer_len = 0;
-                    // num_clients remains effectively the same (one new socket, one old player struct reused)
-                }
-                
-                num_registered_players++; // Rejoining P_PLAYING state
-
-                printf("Server: Player %s reconnected successfully as player %c.\n", all_players[i].username, all_players[i].player_role);
-                send_register_ack(&all_players[i]);
-
-                if (current_turn_player_index != -1) { // Game was active
-                    if (current_turn_player_index == i) {
-                        start_player_turn(all_players, i, game_board);
-                    } else {
-                        // Inform the player about the current board, perhaps via a special message or next move_ok/your_turn
-                        // For now, sending their turn if it is, otherwise they wait.
-                         ServerYourTurnPayload temp_payload; // Or a generic board update
-                         strcpy(temp_payload.type, "your_turn"); // Misnomer if not their turn, but sends board
-                         memcpy(temp_payload.board, game_board, sizeof(temp_payload.board));
-                         temp_payload.timeout = 0; // Indicate it's just a state update
-                         char *state_update_json = serialize_server_your_turn(&temp_payload);
-                         if(state_update_json){
-                            send(all_players[i].socket_fd, state_update_json, strlen(state_update_json),0);
-                            send(all_players[i].socket_fd, "\n", 1, 0);
-                            free(state_update_json);
-                         }
-                    }
-                } else { // Game might not have started or was reset; try starting
-                    int ready_players = 0;
-                    for(int k=0; k<MAX_CLIENTS; ++k) if(all_players[k].state == P_PLAYING || all_players[k].state == P_REGISTERED) ready_players++;
-                    attempt_game_start(all_players, ready_players, game_board);
-                }
-                return;
-            } else {
-                // Username exists and is not a rejoinable disconnected player
-                send_register_nack(new_connection_player_state_obj, "Username already taken or invalid state.");
-                return;
+    if (player->state != P_CONNECTED)
+    {
+        fprintf(stderr, "Server: Player (socket %d) attempted to register but not in P_CONNECTED state (current state: %d).\n", player->socket_fd, player->state);
+        ServerRegisterNackPayload nack;
+        strcpy(nack.type, "register_nack");
+        strcpy(nack.reason, "Invalid state for registration.");
+        char *nack_json = serialize_server_register_nack(&nack);
+        if (nack_json)
+        {
+            if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
+                send(player->socket_fd, "\n", 1, 0) == -1)
+            {
+                perror("send register_nack (invalid state) or newline");
             }
+            free(nack_json);
+        }
+        return;
+    }
+
+    if (strlen(reg_payload.username) == 0)
+    {
+        fprintf(stderr, "Server: Empty username in registration from socket %d.\n", player->socket_fd);
+        ServerRegisterNackPayload nack;
+        strcpy(nack.type, "register_nack");
+        strcpy(nack.reason, "Username cannot be empty.");
+        char *nack_json = serialize_server_register_nack(&nack);
+        if (nack_json)
+        {
+            if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
+                send(player->socket_fd, "\n", 1, 0) == -1)
+            {
+                perror("send register_nack (empty username) or newline");
+            }
+            free(nack_json);
+        }
+        return;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if (all_players[i].socket_fd != -1 && (&all_players[i] != player) &&
+            (all_players[i].state == P_REGISTERED || all_players[i].state == P_PLAYING) &&
+            strcmp(all_players[i].username, reg_payload.username) == 0)
+        {
+            fprintf(stderr, "Server: Username '%s' already taken. Registration failed for socket %d.\n", reg_payload.username, player->socket_fd);
+            ServerRegisterNackPayload nack;
+            strcpy(nack.type, "register_nack");
+            strcpy(nack.reason, "invalid");
+            char *nack_json = serialize_server_register_nack(&nack);
+            if (nack_json)
+            {
+                if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
+                    send(player->socket_fd, "\n", 1, 0) == -1)
+                {
+                    perror("send register_nack (username taken) or newline");
+                }
+                free(nack_json);
+            }
+            return;
         }
     }
 
-    // New registration if username not found for reconnection
-    if (get_occupied_game_slots(all_players) >= MAX_CLIENTS) {
-        send_register_nack(new_connection_player_state_obj, "Server is full.");
+    if (*current_num_registered_players >= MAX_CLIENTS && player->state != P_REGISTERED)
+    {
+        fprintf(stderr, "Server: Maximum registered players reached. Cannot register '%s'.\n", reg_payload.username);
+        ServerRegisterNackPayload nack;
+        strcpy(nack.type, "register_nack");
+        strcpy(nack.reason, "invalid");
+        char *nack_json = serialize_server_register_nack(&nack);
+        if (nack_json)
+        {
+            if (send(player->socket_fd, nack_json, strlen(nack_json), 0) == -1 ||
+                send(player->socket_fd, "\n", 1, 0) == -1)
+            {
+                perror("send register_nack (server full) or newline");
+            }
+            free(nack_json);
+        }
         return;
     }
 
-    // Proceed with new registration for new_connection_player_state_obj
-    strncpy(new_connection_player_state_obj->username, reg_payload.username, MAX_USERNAME_LEN - 1);
-    new_connection_player_state_obj->username[MAX_USERNAME_LEN - 1] = '\0';
-    new_connection_player_state_obj->state = P_REGISTERED;
-    new_connection_player_state_obj->is_game_participant = 1; // Will be part of a game
-    num_registered_players++;
+    strncpy(player->username, reg_payload.username, MAX_USERNAME_LEN - 1);
+    player->username[MAX_USERNAME_LEN - 1] = '\0';
+    player->state = P_REGISTERED;
+    (*current_num_registered_players)++;
 
-    printf("Server: Player %s (socket %d) registered successfully. Total registered for game: %d\n", new_connection_player_state_obj->username, new_connection_player_state_obj->socket_fd, num_registered_players);
-    send_register_ack(new_connection_player_state_obj);
-    
-    attempt_game_start(all_players, num_registered_players, game_board);
+    printf("Server: Player %s (socket %d) registered successfully. Total registered: %d\n", player->username, player->socket_fd, *current_num_registered_players);
+
+    ServerRegisterAckPayload ack;
+    strcpy(ack.type, "register_ack");
+    char *ack_json = serialize_server_register_ack(&ack);
+    if (ack_json)
+    {
+        if (send(player->socket_fd, ack_json, strlen(ack_json), 0) == -1 ||
+            send(player->socket_fd, "\n", 1, 0) == -1)
+        {
+            perror("send register_ack or newline");
+            handle_client_disconnection(player, all_players, game_board);
+        }
+        free(ack_json);
+    }
+    else
+    {
+        fprintf(stderr, "Error serializing ServerRegisterAckPayload for %s\n", player->username);
+    }
+
+    if (player->state == P_REGISTERED)
+    {
+        attempt_game_start(all_players, *current_num_registered_players, game_board);
+    }
 }
 
+int validate_and_process_move(char game_board[8][9], int r1, int c1, int r2, int c2, char player_role)
+{
+
+    printf("Server: Validating move for %c from (%d,%d) to (%d,%d)\n", player_role, r1, c1, r2, c2);
+    if (r1 < 0 || r1 >= 8 || c1 < 0 || c1 >= 8 || r2 < 0 || r2 >= 8 || c2 < 0 || c2 >= 8)
+    {
+        printf("Server: Move out of bounds.\n");
+        return 0;
+    }
+    if (game_board[r1][c1] != player_role)
+    {
+        printf("Server: Source cell does not contain player's piece.\n");
+        return 0;
+    }
+    if (game_board[r2][c2] != '.')
+    {
+        printf("Server: Destination cell not empty.\n");
+        return 0;
+    }
+    int dr = abs(r1 - r2);
+    int dc = abs(c1 - c2);
+
+    if ((dr <= 2 && dc <= 2) && (dr > 0 || dc > 0))
+    {
+        if (dr == 2 || dc == 2)
+        {
+            game_board[r1][c1] = '.';
+        }
+        game_board[r2][c2] = player_role;
+
+        char opponent_role = (player_role == 'R') ? 'B' : 'R';
+        for (int row_offset = -1; row_offset <= 1; ++row_offset)
+        {
+            for (int col_offset = -1; col_offset <= 1; ++col_offset)
+            {
+                if (row_offset == 0 && col_offset == 0)
+                {
+                    continue;
+                }
+
+                int adjacent_r = r2 + row_offset;
+                int adjacent_c = c2 + col_offset;
+
+                if (adjacent_r >= 0 && adjacent_r < 8 && adjacent_c >= 0 && adjacent_c < 8)
+                {
+                    if (game_board[adjacent_r][adjacent_c] == opponent_role)
+                    {
+                        game_board[adjacent_r][adjacent_c] = player_role;
+                        printf("Server: Flipped opponent piece at (%d,%d) to %c\n", adjacent_r, adjacent_c, player_role);
+                    }
+                }
+            }
+        }
+        printf("Server: Move validated and processed (placeholder).\n");
+        return 1;
+    }
+    printf("Server: Move failed validation (placeholder).\n");
+    return 0;
+}
 // --- End OctaFlip Game Logic Interface ---
 
 // Helper function to check for no empty cells on the board
@@ -899,26 +949,16 @@ int check_and_process_game_over(PlayerState all_players[], char game_board[8][9]
         // Clean up players involved in the game
         for (int i = 0; i < MAX_CLIENTS; ++i)
         {
-            if (all_players[i].is_game_participant) { // Only reset actual participants
-                if (all_players[i].state == P_PLAYING || all_players[i].state == P_REGISTERED) {
-                    num_registered_players--;
-                }
-                // If P_DISCONNECTED, num_registered_players was already decremented when they disconnected.
-
-                if (all_players[i].socket_fd != -1) { // Still connected
-                    // remove_player will handle FD_CLR, num_clients--, etc.
-                    // but we also need to ensure they are fully reset for a new game.
-                    // For simplicity, just close here if they were playing.
-                     close(all_players[i].socket_fd);
-                     FD_CLR(all_players[i].socket_fd, &master_fds);
-                     if (num_clients > 0) num_clients--;
-                }
-                all_players[i].socket_fd = -1;
+            // Remove any player that was part of the game or is still connected
+            if (all_players[i].socket_fd != -1)
+            {
+                remove_player(&all_players[i], all_players, &num_clients, &num_registered_players);
+            }
+            else if (all_players[i].player_role == 'R' || all_players[i].player_role == 'B')
+            {
                 all_players[i].state = P_EMPTY;
                 memset(all_players[i].username, 0, MAX_USERNAME_LEN);
                 all_players[i].player_role = ' ';
-                all_players[i].is_game_participant = 0;
-                all_players[i].recv_buffer_len = 0;
             }
         }
 
@@ -1079,7 +1119,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
     }
     else
     {
-        printf("Server: Player %s attempts move (received: %d,%d -> %d,%d).\n",
+        printf("Server: Player %s attempts move (received 1-indexed: %d,%d -> %d,%d).\n",
                player->username, r1_received, c1_received, r2_received, c2_received);
         r1 = r1_received - 1;
         c1 = c1_received - 1;
@@ -1158,7 +1198,7 @@ void process_move_request(PlayerState *player, const char *received_json_string,
 // Function to handle turn timeout
 void handle_turn_timeout(PlayerState all_players[], char game_board[8][9])
 {
-    if current_turn_player_index == -1 || all_players[current_turn_player_index].state != P_PLAYING)
+    if (current_turn_player_index == -1 || all_players[current_turn_player_index].state != P_PLAYING)
     {
         return;
     }
@@ -1207,7 +1247,6 @@ void initialize_player_states(PlayerState all_players[])
         all_players[i].player_role = ' ';
         all_players[i].recv_buffer_len = 0;
         all_players[i].recv_buffer[0] = '\0';
-        all_players[i].is_game_participant = 0;
     }
 }
 
@@ -1271,19 +1310,18 @@ int initialize_server_socket(const char *port)
 }
 
 // Function to add a player to the list
-void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen_t addr_len, PlayerState all_players[], int *current_num_clients_ptr)
+void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen_t addr_len, PlayerState all_players[], int *current_num_clients)
 {
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
-        if (all_players[i].socket_fd == -1 && all_players[i].state == P_EMPTY) // Find a truly empty slot
+        if (all_players[i].socket_fd == -1)
         {
             all_players[i].socket_fd = client_socket;
             all_players[i].address = *client_addr;
             all_players[i].addr_len = addr_len;
             all_players[i].state = P_CONNECTED;
             all_players[i].last_message_time = time(NULL);
-            all_players[i].is_game_participant = 0; // Not yet a game participant
-            (*current_num_clients_ptr)++;
+            (*current_num_clients)++;
 
             FD_SET(client_socket, &master_fds);
             if (client_socket > fd_max)
@@ -1304,47 +1342,33 @@ void add_player(int client_socket, struct sockaddr_storage *client_addr, socklen
 }
 
 // Function to remove a player
-void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int *current_num_clients_ptr, int *current_total_registered_players_ptr)
+void remove_player(PlayerState *player_to_remove, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players)
 {
-    if (player_to_remove->socket_fd != -1) // Only if there's an active socket
+    if (player_to_remove->socket_fd != -1)
     {
         printf("Server: Closing connection for socket %d (username: %s)\n", player_to_remove->socket_fd, player_to_remove->username[0] ? player_to_remove->username : "N/A");
+
         close(player_to_remove->socket_fd);
         FD_CLR(player_to_remove->socket_fd, &master_fds);
-        player_to_remove->socket_fd = -1; // Mark socket as closed
-        if (*current_num_clients_ptr > 0) {
-            (*current_num_clients_ptr)--;
-        }
-    }
 
-    // If player was P_PLAYING or P_REGISTERED, they become P_DISCONNECTED but remain a game participant.
-    // num_registered_players is decremented. If they rejoin, it's incremented again.
-    if (player_to_remove->state == P_PLAYING || player_to_remove->state == P_REGISTERED) {
-        if (player_to_remove->is_game_participant) { // Should always be true for these states if logic is correct
-            player_to_remove->state = P_DISCONNECTED;
-             if (*current_total_registered_players_ptr > 0) {
-                (*current_total_registered_players_ptr)--;
-            }
-            printf("Server: Player %s (role %c) disconnected, state P_DISCONNECTED. Registered players: %d\n",
-                   player_to_remove->username, player_to_remove->player_role, *current_total_registered_players_ptr);
-            // Username, player_role, and is_game_participant are kept for potential reconnection.
-        } else { // Should not happen if is_game_participant is managed correctly
-            player_to_remove->state = P_EMPTY; // Or some error state
-            memset(player_to_remove->username, 0, MAX_USERNAME_LEN);
-            player_to_remove->player_role = ' ';
-            player_to_remove->is_game_participant = 0;
-            if (*current_total_registered_players_ptr > 0 && player_to_remove->state == P_REGISTERED) { // only if they were P_REGISTERED
-                 // This path is less likely now, P_DISCONNECTED handles game participants
+        if (player_to_remove->state == P_REGISTERED || player_to_remove->state == P_PLAYING)
+        {
+            if (*current_num_registered_players > 0)
+            {
+                (*current_num_registered_players)--;
             }
         }
-    } else if (player_to_remove->state == P_CONNECTED) { // Disconnected before registering for a game
-        player_to_remove->state = P_EMPTY;
+
+        player_to_remove->socket_fd = -1;
+        player_to_remove->state = P_DISCONNECTED;
         memset(player_to_remove->username, 0, MAX_USERNAME_LEN);
         player_to_remove->player_role = ' ';
-        player_to_remove->is_game_participant = 0;
+
+        if (*current_num_clients > 0)
+        {
+            (*current_num_clients)--;
+        }
     }
-    // If already P_DISCONNECTED or P_EMPTY, no change to num_registered_players from this function.
-    // Game over logic will fully clean up P_DISCONNECTED slots.
 }
 
 // Function to accept a new connection
@@ -1374,76 +1398,89 @@ void accept_new_connection(int current_listener_fd, PlayerState all_players[], i
 }
 
 // Function to handle client disconnection and associated game logic
-void handle_client_disconnection(PlayerState *disconnected_player_obj, PlayerState all_players[], char game_board[8][9])
+void handle_client_disconnection(PlayerState *disconnected_player, PlayerState all_players[], char game_board[8][9])
 {
-    if (disconnected_player_obj == NULL) return;
-    // socket_fd check is implicitly handled by recv returning <=0 or by direct call
+    if (disconnected_player == NULL || disconnected_player->socket_fd == -1)
+    {
+        return;
+    }
 
     printf("Server: Handling disconnection for player %s (socket %d, state %d).\n",
-           disconnected_player_obj->username[0] ? disconnected_player_obj->username : "N/A",
-           disconnected_player_obj->socket_fd, disconnected_player_obj->state);
+           disconnected_player->username[0] ? disconnected_player->username : "N/A",
+           disconnected_player->socket_fd, disconnected_player->state);
 
     char disconnected_username_copy[MAX_USERNAME_LEN];
-    strncpy(disconnected_username_copy, disconnected_player_obj->username, MAX_USERNAME_LEN -1);
-    disconnected_username_copy[MAX_USERNAME_LEN-1] = '\0';
-    char disconnected_player_role_copy = disconnected_player_obj->player_role;
-    ClientConnectionState old_state = disconnected_player_obj->state;
-    int was_game_participant = disconnected_player_obj->is_game_participant;
+    strncpy(disconnected_username_copy, disconnected_player->username, MAX_USERNAME_LEN - 1);
+    disconnected_username_copy[MAX_USERNAME_LEN - 1] = '\0';
+    char disconnected_player_role = disconnected_player->player_role;
 
+    int game_was_active_with_two_players = 0;
+    if (current_turn_player_index != -1)
+    {
+        int playing_count = 0;
+        for (int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if (players[i].state == P_PLAYING)
+                playing_count++;
+        }
+        if (playing_count == MAX_CLIENTS)
+            game_was_active_with_two_players = 1;
+    }
 
-    int disconnected_player_slot_idx = -1;
-    for(int i=0; i<MAX_CLIENTS; ++i) {
-        if(&all_players[i] == disconnected_player_obj) {
-            disconnected_player_slot_idx = i;
+    int disconnected_player_slot = -1;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
+    {
+        if (&all_players[i] == disconnected_player)
+        {
+            disconnected_player_slot = i;
             break;
         }
     }
 
-    remove_player(disconnected_player_obj, all_players, &num_clients, &num_registered_players);
+    ClientConnectionState old_state = disconnected_player->state;
+    remove_player(disconnected_player, all_players, &num_clients, &num_registered_players);
 
+    if (old_state == P_PLAYING && game_was_active_with_two_players)
+    {
+        if (num_registered_players == 1)
+        {
+            printf("Server: Player %s (role %c) disconnected. Game continues with remaining player.\n",
+                   disconnected_username_copy, disconnected_player_role);
 
-    if ((old_state == P_PLAYING || old_state == P_REGISTERED) && was_game_participant) {
-        // Player was part of a game and is now P_DISCONNECTED
-        if (current_turn_player_index == disconnected_player_slot_idx) {
-            log_board_and_move(game_board, disconnected_username_copy, -1, -1, -1, -1, "Disconnect Pass");
-            consecutive_passes_server++; // This might trigger game over if other player also passed/disconnected
-            switch_to_next_turn(all_players, game_board);
-        } else {
-            // Not their turn, check if game should end or continue
-            // If only one player left connected and playing, they might win by default or game pauses
-            // check_and_process_game_over will be called by switch_to_next_turn or main loop timeout
-            // For now, if game doesn't end, it waits for the other player or re-connection.
-            if (check_and_process_game_over(all_players, game_board)) {
-                 return; // Game ended
+            if (disconnected_player_slot == current_turn_player_index)
+            {
+                log_board_and_move(game_board, disconnected_username_copy, -1, -1, -1, -1, "Disconnect Pass");
+                consecutive_passes_server++;
+                switch_to_next_turn(all_players, game_board);
+            }
+            else
+            {
+                if (check_and_process_game_over(all_players, game_board))
+                {
+                    return;
+                }
             }
         }
-        // If no players are P_PLAYING or P_REGISTERED anymore, but some are P_DISCONNECTED (game participants)
-        // the game is paused. If all P_DISCONNECTED, game might end after a timeout (not implemented here)
-        // or upon next check_and_process_game_over.
-        int active_game_players = 0;
-        for(int i=0; i<MAX_CLIENTS; ++i) {
-            if(all_players[i].state == P_PLAYING) active_game_players++;
+        else if (num_registered_players == 0)
+        {
+            printf("Server: Last playing player %s disconnected or both players disconnected from an active game. Resetting.\n", disconnected_username_copy);
+            current_turn_player_index = -1;
+            total_moves_made_in_game = 0;
+            consecutive_passes_server = 0;
+            check_and_process_game_over(all_players, game_board);
         }
-        if(active_game_players == 0 && get_occupied_game_slots(all_players) > 0) {
-            printf("Server: All active players disconnected. Game paused for %s and potentially others.\n", disconnected_username_copy);
-            current_turn_player_index = -1; // Pause turns
-        } else if (active_game_players == 0 && get_occupied_game_slots(all_players) == 0) {
-             printf("Server: All players disconnected. Resetting game.\n");
-             current_turn_player_index = -1;
-             total_moves_made_in_game = 0;
-             consecutive_passes_server = 0;
-             // Board will be reset by attempt_game_start when new players join.
-        }
-
-
-    } else if (old_state == P_CONNECTED) {
-        // Player disconnected before fully registering for a game. Slot is now P_EMPTY.
-        printf("Server: Player (socket %d, previously P_CONNECTED) disconnected before registering for game.\n", disconnected_player_obj->socket_fd);
+    }
+    else if (num_registered_players == 0)
+    {
+        printf("Server: All clients disconnected or game was not fully active. Server idle or reset.\n");
+        current_turn_player_index = -1;
+        total_moves_made_in_game = 0;
+        consecutive_passes_server = 0;
     }
 }
 
 // Function to handle messages from a client
-void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients_ptr, int *current_total_registered_players_ptr, char game_board[8][9])
+void handle_client_message(PlayerState *player, PlayerState all_players[], int *current_num_clients, int *current_num_registered_players, char game_board[8][9])
 {
     char buf[BUFFER_SIZE];
     int nbytes = recv(player->socket_fd, buf, sizeof(buf) - 1, 0);
@@ -1499,7 +1536,7 @@ void handle_client_message(PlayerState *player, PlayerState all_players[], int *
         {
             if (strcmp(msg_type_const, "register") == 0)
             {
-                process_registration_request(player, json_message, all_players, game_board);
+                process_registration_request(player, json_message, all_players, current_num_registered_players, game_board);
             }
             else if (strcmp(msg_type_const, "move") == 0)
             {
