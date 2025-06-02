@@ -32,75 +32,126 @@ typedef struct
 // Helper: Check if coordinates are within board limits (client-side)
 static int isWithinBounds_client(int r, int c)
 {
-    return (r >= 0 && r < 8 && c >= 0 && c < 8);
+    return (r >= 0 && r < BOARD_ROWS && c >= 0 && c < BOARD_COLS);
 }
 
-int evaluate_board(char grid[9][9], char color) {
+int evaluate_board(char grid[BOARD_ROWS][BOARD_COLS + 1], char color)
+{ // grid is 0-indexed
     int my = 0, opp = 0;
     char opp_color = (color == 'R') ? 'B' : 'R';
-    for (int i = 1; i <= 8; i++) {
-        for (int j = 1; j <= 8; j++) {
-            if (grid[i][j] == color) my++;
-            else if (grid[i][j] == opp_color) opp++;
+    for (int i = 0; i < BOARD_ROWS; i++)
+    { // Iterate 0 to BOARD_ROWS-1
+        for (int j = 0; j < BOARD_COLS; j++)
+        { // Iterate 0 to BOARD_COLS-1
+            if (grid[i][j] == color)
+                my++;
+            else if (grid[i][j] == opp_color)
+                opp++;
         }
     }
     return my - opp;
 }
 
-void clone_grid(char src[9][9], char dest[9][9]) {
-    for (int i = 0; i < 9; i++)
-        for (int j = 0; j < 9; j++)
-            dest[i][j] = src[i][j];
+void clone_grid(char src[BOARD_ROWS][BOARD_COLS + 1], char dest[BOARD_ROWS][BOARD_COLS + 1])
+{
+    for (int i = 0; i < BOARD_ROWS; i++)
+    {
+        // memcpy is efficient for copying rows, including the null terminator if BOARD_COLS + 1 is the size
+        memcpy(dest[i], src[i], BOARD_COLS + 1);
+    }
 }
 
-void apply_move(char grid[9][9], int sx, int sy, int tx, int ty, char color) {
-    grid[tx][ty] = color;
+void apply_move(char grid[BOARD_ROWS][BOARD_COLS + 1], int sx, int sy, int tx, int ty, char color)
+{                         // sx, sy, tx, ty are 0-indexed
+    grid[tx][ty] = color; // Place the piece on the target square
     if (abs(sx - tx) > 1 || abs(sy - ty) > 1)
-        grid[sx][sy] = '.';
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            int ni = tx + dy, nj = ty + dx;
-            if (ni >= 1 && ni <= 8 && nj >= 1 && nj <= 8 &&
+    {                       // If it's a jump (distance > 1)
+        grid[sx][sy] = '.'; // Vacate the source square
+    }
+
+    // Flip opponent's pieces around the target square
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            if (dx == 0 && dy == 0)
+                continue; // Skip the piece itself
+
+            int ni = tx + dy; // Neighboring row (0-indexed)
+            int nj = ty + dx; // Neighboring column (0-indexed)
+
+            if (isWithinBounds_client(ni, nj) &&
                 grid[ni][nj] != '.' && grid[ni][nj] != color)
-                grid[ni][nj] = color;
+            {
+                grid[ni][nj] = color; // Flip opponent's piece
+            }
         }
     }
 }
-int is_valid_move(int sx, int sy, int tx, int ty) {
+
+// is_valid_move is assumed to be logically correct for the game rules.
+// It calculates differences, so it works with either 0-indexed or 1-indexed
+// as long as sx, sy, tx, ty are all consistently indexed.
+// It will now be called with 0-indexed coordinates.
+int is_valid_move(int sx, int sy, int tx, int ty)
+{
     int dx = abs(sx - tx);
     int dy = abs(sy - ty);
-    if ((dx == 1 && dy <= 1) || (dx == 2 && dy <= 2)) {
+    if ((dx == 1 && dy <= 1) || (dx == 2 && dy <= 2))
+    {
         return dx <= 2 && dy <= 2 && (dx == dy || dx == 0 || dy == 0);
     }
     return 0;
 }
 
-int negamax(char grid[9][9], char color, int depth, MoveCoords *best_move) {
-    if (depth == 0) return evaluate_board(grid, color);
-    int best_score = -10000;
+int negamax(char grid[BOARD_ROWS][BOARD_COLS + 1], char color, int depth, MoveCoords *best_move)
+{ // grid is 0-indexed
+    if (depth == 0)
+        return evaluate_board(grid, color); // Pass 0-indexed grid
+    int best_score = -10000;                // A very small number
     char opp_color = (color == 'R') ? 'B' : 'R';
 
-    for (int i = 1; i <= 8; i++) {
-        for (int j = 1; j <= 8; j++) {
-            if (grid[i][j] != color) continue;
-            for (int dy = -2; dy <= 2; dy++) {
-                for (int dx = -2; dx <= 2; dx++) {
-                    int ni = i + dy, nj = j + dx;
-                    if (ni < 1 || ni > 8 || nj < 1 || nj > 8 || grid[ni][nj] != '.') continue;
-                    if (!is_valid_move(i, j, ni, nj)) continue;
+    for (int r_s = 0; r_s < BOARD_ROWS; r_s++)
+    { // Source row, 0-indexed
+        for (int c_s = 0; c_s < BOARD_COLS; c_s++)
+        { // Source col, 0-indexed
+            if (grid[r_s][c_s] != color)
+                continue; // Only consider player's pieces
 
-                    char new_grid[9][9];
-                    clone_grid(grid, new_grid);
-                    apply_move(new_grid, i, j, ni, nj, color);
+            // Iterate over possible moves (hops and jumps up to 2 squares away)
+            for (int dr = -2; dr <= 2; dr++)
+            { // Displacement in row
+                for (int dc = -2; dc <= 2; dc++)
+                { // Displacement in col
+                    if (dr == 0 && dc == 0)
+                        continue; // Must move to a different square
 
-                    int score = -negamax(new_grid, opp_color, depth - 1, NULL);
-                    if (score > best_score) {
+                    int r_t = r_s + dr; // Target row, 0-indexed
+                    int c_t = c_s + dc; // Target col, 0-indexed
+
+                    // Check if the target is within bounds and is an empty spot
+                    if (!isWithinBounds_client(r_t, c_t) || grid[r_t][c_t] != '.')
+                        continue;
+
+                    // Check if the move is valid according to game rules
+                    if (!is_valid_move(r_s, c_s, r_t, c_t))
+                        continue; // Pass 0-indexed coords
+
+                    char new_grid[BOARD_ROWS][BOARD_COLS + 1];
+                    clone_grid(grid, new_grid);                      // Use 0-indexed clone
+                    apply_move(new_grid, r_s, c_s, r_t, c_t, color); // Use 0-indexed apply
+
+                    int score = -negamax(new_grid, opp_color, depth - 1, NULL); // Recursive call for opponent
+
+                    if (score > best_score)
+                    {
                         best_score = score;
-                        if (best_move) {
-                            best_move->sx = i;
-                            best_move->sy = j;
-                            best_move->tx = ni;
-                            best_move->ty = nj;
+                        if (best_move)
+                        {                        // If best_move pointer is provided, update it
+                            best_move->sx = r_s; // Store 0-indexed coordinates
+                            best_move->sy = c_s;
+                            best_move->tx = r_t;
+                            best_move->ty = c_t;
                         }
                     }
                 }
@@ -113,8 +164,17 @@ int negamax(char grid[9][9], char color, int depth, MoveCoords *best_move) {
 // Automated Move Generation Function
 MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 1], char player_symbol)
 {
-    MoveCoords move;
+    MoveCoords move = {0, 0, 0, 0}; // Initialize (consider if a "no move" state is needed)
+
+    // negamax works with 0-indexed board and fills 'move' with 0-indexed coordinates
     negamax(current_board, player_symbol, 4, &move);
+
+    // Convert 0-indexed coordinates from negamax to 1-indexed for the game protocol/output
+    move.sx += 1;
+    move.sy += 1;
+    move.tx += 1;
+    move.ty += 1;
+
     return move;
 }
 
@@ -286,7 +346,7 @@ char *serialize_client_move(const ClientMovePayload *payload)
     cJSON_Delete(root);
     return json_string;
 
-    error:
+error:
     cJSON_Delete(root);
     return NULL;
 }
@@ -878,7 +938,7 @@ int parse_client_args(int argc, char *argv[], char **server_ip_out, char **serve
 
     return 0;
 
-    usage_error:
+usage_error:
     fprintf(stderr, "Usage: %s -ip <server_ip> -port <server_port> -username <username>\n", argv[0]);
     return -1;
 }
