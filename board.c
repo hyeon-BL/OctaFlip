@@ -48,11 +48,25 @@ void clear_matrix_display(struct RGBLedMatrix *matrix)
 {
     if (!matrix)
         return;
-    led_canvas_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
-    // If using a canvas/swap chain model with the library:
-    // struct LedCanvas *canvas = led_matrix_get_canvas(matrix);
-    // led_canvas_fill(canvas, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
-    // led_matrix_swap(matrix, canvas); // or similar function to refresh display
+
+    // Create an offscreen canvas to draw the cleared state
+    struct LedCanvas *canvas = led_matrix_create_offscreen_canvas(matrix);
+    if (!canvas)
+    {
+        fprintf(stderr, "Error: Could not create offscreen canvas in clear_matrix_display.\n");
+        return;
+    }
+
+    led_canvas_fill(canvas, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
+
+    // Swap the cleared canvas to the display.
+    // led_matrix_swap_on_vsync takes ownership of 'canvas' and returns the PREVIOUS front buffer.
+    // This previous buffer should be deleted if not reused.
+    struct LedCanvas *previous_front_buffer = led_matrix_swap_on_vsync(matrix, canvas);
+    if (previous_front_buffer)
+    { // It might be NULL if this is the very first swap
+        led_canvas_clear(previous_front_buffer);
+    }
 }
 
 void cleanup_matrix(struct RGBLedMatrix *matrix)
@@ -66,7 +80,7 @@ void cleanup_matrix(struct RGBLedMatrix *matrix)
 // --- Helper function to draw a single pixel (if needed directly) ---
 // static void set_pixel(struct RGBLedMatrix* matrix, int x, int y, RGBColor color) {
 //     if (!matrix || x < 0 || x >= 64 || y < 0 || y >= 64) return;
-//     led_canvas_set_pixel(matrix, x, y, color.r, color.g, color.b);
+//     led_canvas_set_pixel(matrix, x, y, color.r, color.g, color.b); // This would also need to change if used
 // }
 
 // Define cell and piece dimensions based on a 64x64 matrix for an 8x8 board
@@ -79,17 +93,17 @@ void cleanup_matrix(struct RGBLedMatrix *matrix)
                                                       // This implies if CELL_SIZE is 8, and 1 pixel border on each side, piece is 6x6.
 
 // Helper function to draw a filled rectangle (you might need to implement this or use library features)
-static void draw_filled_rect(struct RGBLedMatrix *matrix, int x_start, int y_start, int width, int height, RGBColor color)
+static void draw_filled_rect(struct LedCanvas *canvas, int x_start, int y_start, int width, int height, RGBColor color)
 {
-    if (!matrix)
+    if (!canvas)
         return;
     for (int y = y_start; y < y_start + height; ++y)
     {
         for (int x = x_start; x < x_start + width; ++x)
         {
-            if (x >= 0 && x < MATRIX_SIZE && y >= 0 && y < MATRIX_SIZE)
+            if (x >= 0 && x < MATRIX_SIZE && y >= 0 && y < MATRIX_SIZE) // Assuming MATRIX_SIZE is canvas width/height
             {
-                led_canvas_set_pixel(matrix, x, y, color.r, color.g, color.b);
+                led_canvas_set_pixel(canvas, x, y, color.r, color.g, color.b);
             }
         }
     }
@@ -100,17 +114,16 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
     if (!matrix)
         return;
 
-    // Get a canvas for drawing (more efficient if doing many pixel operations)
-    // struct LedCanvas *offscreen_canvas = led_matrix_create_offscreen_canvas(matrix);
-    // if (!offscreen_canvas) {
-    //     fprintf(stderr, "Failed to create offscreen canvas.\n");
-    //     return;
-    // }
-    // For simplicity with the provided library functions, we'll draw directly to the matrix.
-    // If performance becomes an issue, using an offscreen canvas and swapping is preferred.
+    // Get an offscreen canvas for drawing
+    struct LedCanvas *offscreen_canvas = led_matrix_create_offscreen_canvas(matrix);
+    if (!offscreen_canvas)
+    {
+        fprintf(stderr, "Failed to create offscreen canvas.\n");
+        return;
+    }
 
-    // 1. Clear the matrix to background color
-    led_canvas_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
+    // 1. Clear the offscreen canvas to background color
+    led_canvas_fill(offscreen_canvas, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
 
     // 2. Draw Grid Lines [cite: 8, 9, 10, 11]
     // Grid lines are at the boundaries of the cells.
@@ -120,13 +133,13 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
     { // 9 lines for 8 cells (0 to 8)
         int y_coord = i * CELL_SIZE;
         if (y_coord >= MATRIX_SIZE)
-            y_coord = MATRIX_SIZE - GRID_LINE_WIDTH;                                    // Clamp to ensure line is visible
-        draw_filled_rect(matrix, 0, y_coord, MATRIX_SIZE, GRID_LINE_WIDTH, COLOR_GRID); // Horizontal line
+            y_coord = MATRIX_SIZE - GRID_LINE_WIDTH;                                              // Clamp to ensure line is visible
+        draw_filled_rect(offscreen_canvas, 0, y_coord, MATRIX_SIZE, GRID_LINE_WIDTH, COLOR_GRID); // Horizontal line
 
         int x_coord = i * CELL_SIZE;
         if (x_coord >= MATRIX_SIZE)
-            x_coord = MATRIX_SIZE - GRID_LINE_WIDTH;                                    // Clamp to ensure line is visible
-        draw_filled_rect(matrix, x_coord, 0, GRID_LINE_WIDTH, MATRIX_SIZE, COLOR_GRID); // Vertical line
+            x_coord = MATRIX_SIZE - GRID_LINE_WIDTH;                                              // Clamp to ensure line is visible
+        draw_filled_rect(offscreen_canvas, x_coord, 0, GRID_LINE_WIDTH, MATRIX_SIZE, COLOR_GRID); // Vertical line
     }
 
     // 3. Draw Pieces in Cells
@@ -170,7 +183,7 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
             if (piece_char == 'R' || piece_char == 'B')
             {
                 // Draw a solid block for R and B [cite: 12, 13]
-                draw_filled_rect(matrix, piece_x_start, piece_y_start, piece_render_size, piece_render_size, piece_color);
+                draw_filled_rect(offscreen_canvas, piece_x_start, piece_y_start, piece_render_size, piece_render_size, piece_color);
             }
             else if (piece_char == '.')
             {
@@ -179,25 +192,30 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
                 int dot_size = 2; // Or 1 for a single pixel
                 int dot_x_start = piece_x_start + (piece_render_size / 2) - (dot_size / 2);
                 int dot_y_start = piece_y_start + (piece_render_size / 2) - (dot_size / 2);
-                draw_filled_rect(matrix, dot_x_start, dot_y_start, dot_size, dot_size, piece_color);
+                draw_filled_rect(offscreen_canvas, dot_x_start, dot_y_start, dot_size, dot_size, piece_color);
             }
             else if (piece_char == '#')
             {
                 // For blocked cells, draw a solid block or a distinct pattern.
-                draw_filled_rect(matrix, piece_x_start, piece_y_start, piece_render_size, piece_render_size, piece_color);
+                draw_filled_rect(offscreen_canvas, piece_x_start, piece_y_start, piece_render_size, piece_render_size, piece_color);
             }
             // If piece_char is something else or COLOR_BACKGROUND, it will effectively be the background
             // color of the piece area, as the main background is already drawn.
         }
     }
 
-    // If using an offscreen canvas that needs to be swapped to the physical matrix:
-    // led_matrix_swap_on_vsync(matrix, offscreen_canvas); // or led_matrix_swap()
-    // led_canvas_delete(offscreen_canvas);
-    // If drawing directly, the changes should be visible.
-    // Some libraries might require an explicit "update" or "refresh" call if they buffer internally
-    // even without an explicit offscreen canvas object. The rpi-rgb-led-matrix library
-    // often updates directly when led_canvas_set_pixel is called on the matrix pointer.
+    // Swap the drawn offscreen_canvas to the display.
+    // led_matrix_swap_on_vsync returns the canvas that was previously on the screen.
+    // For a one-shot render like this, we should delete that previous canvas.
+    struct LedCanvas *previous_front_buffer = led_matrix_swap_on_vsync(matrix, offscreen_canvas);
+    if (previous_front_buffer)
+    {
+        led_canvas_clear(previous_front_buffer);
+    }
+    // Note: 'offscreen_canvas' is now the current front buffer on the matrix.
+    // It will be cleaned up when led_matrix_delete() is called on the matrix.
+    // If this function were part of a continuous rendering loop, the returned
+    // 'previous_front_buffer' would become the new 'offscreen_canvas' for the next frame.
 }
 
 // (Standalone main function will be added in Stage L4)
