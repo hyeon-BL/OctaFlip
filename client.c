@@ -550,7 +550,7 @@ void send_registration_to_server(int sockfd, const char *username)
     free(json_string);
 }
 
-void display_board(char board[8][9])
+void display_board(char board[BOARD_ROWS][BOARD_COLS + 2])
 {
     printf("Current Board:\n");
     printf("   1 2 3 4 5 6 7 8\n");
@@ -935,7 +935,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    // Initialize LED Matrix (modifies argc and argv)
+    // Initialize LED Matrix (modifies argc, &argv)
     // Do this after parsing our own args but before using them if they might be consumed by matrix lib
     matrix_ptr = initialize_matrix(&argc, &argv);
     // We can check if matrix_ptr is NULL here if initialization is critical before connection,
