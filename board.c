@@ -11,7 +11,7 @@ const RGBColor COLOR_BLUE    = {  0,   0, 255};
 const RGBColor COLOR_EMPTY   = { 20,  20,  20};
 const RGBColor COLOR_BLOCKED = { 50,  50,  50};
 const RGBColor COLOR_GRID    = {100, 100, 100};
-const RGBColor COLOR_BG      = {  0,   0,   0};
+const RGBColor COLOR_BACKGROUND = {  0,   0,   0};
 
 #define MATRIX_SIZE    64
 #define CELL_SIZE      (MATRIX_SIZE / BOARD_COLS)  // 8
