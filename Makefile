@@ -15,7 +15,7 @@ RGB_LIBRARY = $(RGB_MATRIX_LIB_DIR)/lib$(RGB_LIBRARY_NAME).a
 
 # 최종 실행 파일 이름 및 소스 파일
 TARGET = client
-SRC = client.c cJSON.c # Add cJSON.c here
+SRC = client.c cJSON.c board.c # Add board.c here
 
 # C API를 사용하는 경우 C++ 런타임 라이브러리 링크가 필요합니다.
 # rpi-rgb-led-matrix 라이브러리가 C++로 작성되었기 때문입니다.

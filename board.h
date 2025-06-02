@@ -38,7 +38,7 @@ struct RGBLedMatrix *initialize_matrix(int *argc, char ***argv);
  * @param octaflip_board A 2D char array representing the 8x8 OctaFlip board
  * (e.g., char board[BOARD_ROWS][BOARD_COLS+1], using 'R', 'B', '.', '#').
  */
-void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 2]);
+void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 1]);
 
 /**
  * @brief Clears the LED matrix display.

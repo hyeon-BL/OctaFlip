@@ -36,7 +36,7 @@ static int isWithinBounds_client(int r, int c)
 }
 
 // Automated Move Generation Function
-MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 2], char player_symbol)
+MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 1], char player_symbol)
 {
     MoveCoords move;
 
@@ -550,7 +550,7 @@ void send_registration_to_server(int sockfd, const char *username)
     free(json_string);
 }
 
-void display_board(char board[BOARD_ROWS][BOARD_COLS + 2])
+void display_board(char board[BOARD_ROWS][BOARD_COLS + 1])
 {
     printf("Current Board:\n");
     printf("   1 2 3 4 5 6 7 8\n");

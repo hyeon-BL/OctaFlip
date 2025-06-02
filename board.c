@@ -109,7 +109,7 @@ static void draw_filled_rect(struct LedCanvas *canvas, int x_start, int y_start,
     }
 }
 
-void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 2])
+void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 1])
 {
     if (!matrix)
         return;
@@ -224,7 +224,7 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
 #ifdef STANDALONE_BOARD_TEST
 int main(int argc, char *argv[])
 {
-    char input_board[BOARD_ROWS][BOARD_COLS + 2]; // +1 for null terminator, +1 for newline
+    char input_board[BOARD_ROWS][BOARD_COLS + 1]; // +1 for null terminator
 
     // 1. Initialize the LED Matrix
     //    Pass argc and argv by address for the library to parse its options
