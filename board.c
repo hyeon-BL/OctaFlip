@@ -33,6 +33,15 @@ static void draw_filled_rect(struct LedCanvas *canvas,
     }
 }
 
+void cleanup_matrix(struct RGBLedMatrix *matrix)
+{
+    if (!matrix)
+        return;
+    clear_matrix_display(matrix); // Optional: clear before deleting
+    led_matrix_delete(matrix);
+}
+
+
 void render_octaflip_board_with_text(
     struct RGBLedMatrix *matrix,
     struct LedFont      *font,
