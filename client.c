@@ -36,7 +36,7 @@ static int isWithinBounds_client(int r, int c)
 }
 
 // Automated Move Generation Function
-MoveCoords move_generate(char current_board[8][9], char player_symbol)
+MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 2], char player_symbol)
 {
     MoveCoords move;
 
