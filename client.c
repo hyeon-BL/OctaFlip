@@ -35,83 +35,86 @@ static int isWithinBounds_client(int r, int c)
     return (r >= 0 && r < 8 && c >= 0 && c < 8);
 }
 
+int evaluate_board(char grid[9][9], char color) {
+    int my = 0, opp = 0;
+    char opp_color = (color == 'R') ? 'B' : 'R';
+    for (int i = 1; i <= 8; i++) {
+        for (int j = 1; j <= 8; j++) {
+            if (grid[i][j] == color) my++;
+            else if (grid[i][j] == opp_color) opp++;
+        }
+    }
+    return my - opp;
+}
+
+void clone_grid(char src[9][9], char dest[9][9]) {
+    for (int i = 0; i < 9; i++)
+        for (int j = 0; j < 9; j++)
+            dest[i][j] = src[i][j];
+}
+
+void apply_move(char grid[9][9], int sx, int sy, int tx, int ty, char color) {
+    grid[tx][ty] = color;
+    if (abs(sx - tx) > 1 || abs(sy - ty) > 1)
+        grid[sx][sy] = '.';
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int ni = tx + dy, nj = ty + dx;
+            if (ni >= 1 && ni <= 8 && nj >= 1 && nj <= 8 &&
+                grid[ni][nj] != '.' && grid[ni][nj] != color)
+                grid[ni][nj] = color;
+        }
+    }
+}
+int is_valid_move(int sx, int sy, int tx, int ty) {
+    int dx = abs(sx - tx);
+    int dy = abs(sy - ty);
+    if ((dx == 1 && dy <= 1) || (dx == 2 && dy <= 2)) {
+        return dx <= 2 && dy <= 2 && (dx == dy || dx == 0 || dy == 0);
+    }
+    return 0;
+}
+
+int negamax(char grid[9][9], char color, int depth, Move *best_move) {
+    if (depth == 0) return evaluate_board(grid, color);
+    int best_score = -10000;
+    char opp_color = (color == 'R') ? 'B' : 'R';
+
+    for (int i = 1; i <= 8; i++) {
+        for (int j = 1; j <= 8; j++) {
+            if (grid[i][j] != color) continue;
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dx = -2; dx <= 2; dx++) {
+                    int ni = i + dy, nj = j + dx;
+                    if (ni < 1 || ni > 8 || nj < 1 || nj > 8 || grid[ni][nj] != '.') continue;
+                    if (!is_valid_move(i, j, ni, nj)) continue;
+
+                    char new_grid[9][9];
+                    clone_grid(grid, new_grid);
+                    apply_move(new_grid, i, j, ni, nj, color);
+
+                    int score = -negamax(new_grid, opp_color, depth - 1, NULL);
+                    if (score > best_score) {
+                        best_score = score;
+                        if (best_move) {
+                            best_move->sx = i;
+                            best_move->sy = j;
+                            best_move->tx = ni;
+                            best_move->ty = nj;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return best_score;
+}
+
 // Automated Move Generation Function
 MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 1], char player_symbol)
 {
     MoveCoords move;
-
-    // Try to find a valid clone move first
-    for (int r_src = 0; r_src < 8; ++r_src)
-    {
-        for (int c_src = 0; c_src < 8; ++c_src)
-        {
-            if (current_board[r_src][c_src] == player_symbol)
-            {
-                // Check 1-step neighbors for clone
-                for (int dr = -1; dr <= 1; ++dr)
-                {
-                    for (int dc = -1; dc <= 1; ++dc)
-                    {
-                        if (dr == 0 && dc == 0)
-                            continue;
-
-                        int r_dest = r_src + dr;
-                        int c_dest = c_src + dc;
-
-                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
-                        {
-                            move.sx = r_src + 1;
-                            move.sy = c_src + 1;
-                            move.tx = r_dest + 1;
-                            move.ty = c_dest + 1;
-                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
-                            return move;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no clone move, try to find a valid jump move
-    for (int r_src = 0; r_src < 8; ++r_src)
-    {
-        for (int c_src = 0; c_src < 8; ++c_src)
-        {
-            if (current_board[r_src][c_src] == player_symbol)
-            {
-                // Check 2-step neighbors for jump
-                for (int dr = -1; dr <= 1; ++dr)
-                {
-                    for (int dc = -1; dc <= 1; ++dc)
-                    {
-                        if (dr == 0 && dc == 0)
-                            continue;
-
-                        int r_dest = r_src + 2 * dr;
-                        int c_dest = c_src + 2 * dc;
-
-                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
-                        {
-                            move.sx = r_src + 1;
-                            move.sy = c_src + 1;
-                            move.tx = r_dest + 1;
-                            move.ty = c_dest + 1;
-                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
-                            return move;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no valid moves found, pass (0,0,0,0 indicates pass)
-    printf("Client AI: No valid moves found. Passing.\n");
-    move.sx = 0;
-    move.sy = 0;
-    move.tx = 0;
-    move.ty = 0;
+    negamax(current_board, player_symbol, 4, &move);
     return move;
 }
 
@@ -283,7 +286,7 @@ char *serialize_client_move(const ClientMovePayload *payload)
     cJSON_Delete(root);
     return json_string;
 
-error:
+    error:
     cJSON_Delete(root);
     return NULL;
 }
@@ -875,7 +878,7 @@ int parse_client_args(int argc, char *argv[], char **server_ip_out, char **serve
 
     return 0;
 
-usage_error:
+    usage_error:
     fprintf(stderr, "Usage: %s -ip <server_ip> -port <server_port> -username <username>\n", argv[0]);
     return -1;
 }
