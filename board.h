@@ -1,7 +1,7 @@
 #ifndef OCTAFLIP_BOARD_DISPLAY_H
 #define OCTAFLIP_BOARD_DISPLAY_H
 
-#include "led-matrix-c.h" // Main header for the rpi-rgb-led-matrix library
+#include "rpi-rgb-led-matrix/include/led-matrix-c.h" // Main header for the rpi-rgb-led-matrix library
 
 // Define standard OctaFlip board dimensions
 #define BOARD_ROWS 8
