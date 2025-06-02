@@ -22,9 +22,10 @@ struct RGBLedMatrix *initialize_matrix(int *argc, char ***argv)
     matrix_options.rows = 64; // Targetting a 64x64 panel [cite: 1]
     matrix_options.cols = 64;
     matrix_options.chain_length = 1;
+    matrix_options.disable_hardware_pulsing = true; // Equivalent to --led-no-hardware-pulse
+    matrix_options.brightness = 50;                 // 0-100
     // matrix_options.hardware_mapping = "adafruit-hat"; // Or your specific hardware
     // matrix_options.gpio_slowdown = 2; // Adjust as needed
-    // matrix_options.brightness = 50; // 0-100
 
     // Parse command-line options for the matrix library.
     // The library has its own command-line option parsing.
