@@ -201,3 +201,58 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
 }
 
 // (Standalone main function will be added in Stage L4)
+
+// Conditionally compile the main function for standalone testing
+#ifdef STANDALONE_BOARD_TEST
+int main(int argc, char *argv[])
+{
+    char input_board[BOARD_ROWS][BOARD_COLS + 1]; // +1 for null terminator
+
+    // 1. Initialize the LED Matrix
+    //    Pass argc and argv by address for the library to parse its options
+    struct RGBLedMatrix *matrix = initialize_matrix(&argc, &argv);
+    if (matrix == NULL)
+    {
+        return 1; // Initialization failed
+    }
+
+    // 2. Read 8x8 board from stdin [cite: 24]
+    //    Assignment 1 format: 8 lines of 8 characters each [cite: 24]
+    printf("Enter 8x8 board configuration (8 lines, 8 chars each, e.g., R B . #):\n");
+    for (int i = 0; i < BOARD_ROWS; ++i)
+    {
+        if (fgets(input_board[i], sizeof(input_board[i]), stdin) == NULL)
+        {
+            fprintf(stderr, "Error reading board input line %d.\n", i + 1);
+            cleanup_matrix(matrix);
+            return 1;
+        }
+        // Remove newline character if present and ensure null termination at BOARD_COLS
+        input_board[i][strcspn(input_board[i], "\n")] = '\0';
+        if (strlen(input_board[i]) != BOARD_COLS)
+        {
+            fprintf(stderr, "Error: Line %d does not have %d characters. Found %zu.\n", i + 1, BOARD_COLS, strlen(input_board[i]));
+            // Optionally, pad or truncate, or exit. For now, we'll proceed but ensure correct termination.
+        }
+        input_board[i][BOARD_COLS] = '\0'; // Ensure null termination at the correct spot
+    }
+
+    // 3. Render the board
+    printf("Rendering board...\n");
+    render_octaflip_board(matrix, input_board);
+
+    // 4. Keep display on for a bit (e.g., 10 seconds) or until key press
+    printf("Displaying for 10 seconds. Press Ctrl+C to exit earlier.\n");
+    sleep(10); // Keep the display active
+
+    // 5. Cleanup
+    printf("Cleaning up matrix...\n");
+    cleanup_matrix(matrix);
+
+    return 0;
+}
+#endif // STANDALONE_BOARD_TEST
+
+// To compile for standalone test (example):
+// gcc board.c -o standalone_board_test -DSTANDALONE_BOARD_TEST $(pkg-config --cflags --libs rgbmatrix)
+// (Adjust linker flags for rpi-rgb-led-matrix library as per its documentation, e.g., -lrgbmatrix)
