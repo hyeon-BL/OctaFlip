@@ -9,6 +9,7 @@
 #include <errno.h>
 #include "protocol.h"
 #include "cJSON.h"
+#include "board.h" // Added for LED matrix control
 
 #define BUFFER_SIZE 2048
 #define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2)
@@ -17,6 +18,8 @@ char client_username[MAX_USERNAME_LEN];
 char my_player_symbol = ' ';
 char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN];
 int client_recv_buffer_len = 0;
+
+static struct RGBLedMatrix *matrix_ptr = NULL; // Pointer for the LED matrix
 
 typedef struct
 {
@@ -593,6 +596,8 @@ void handle_server_message(const char *json_message, int sockfd)
         if (deserialize_server_register_nack(json_message, &nack_payload) == 0)
         {
             fprintf(stderr, "Registration failed: %s\n", nack_payload.reason);
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -641,6 +646,10 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             printf("\nIt's your turn! (Automating move)\n");
             display_board(yt_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, yt_payload.board);
+            }
 
             if (my_player_symbol == ' ')
             {
@@ -688,6 +697,10 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             printf("Move accepted.\n");
             display_board(mo_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, mo_payload.board);
+            }
             printf("Next player: %s\n", mo_payload.next_player);
             if (strcmp(mo_payload.next_player, client_username) != 0)
             {
@@ -714,6 +727,10 @@ void handle_server_message(const char *json_message, int sockfd)
                 printf("\n");
             }
             display_board(im_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, im_payload.board);
+            }
             printf("Next player: %s. It might be your turn again if server indicates.\n", im_payload.next_player);
             if (strcmp(im_payload.next_player, client_username) != 0)
             {
@@ -764,6 +781,8 @@ void handle_server_message(const char *json_message, int sockfd)
                 printf("The game is a Draw.\n");
             }
 
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             printf("Exiting.\n");
             exit(0);
@@ -771,6 +790,8 @@ void handle_server_message(const char *json_message, int sockfd)
         else
         {
             fprintf(stderr, "Error deserializing game_over.\n");
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -906,10 +927,19 @@ int main(int argc, char *argv[])
     char *username_from_arg;
     int sockfd;
 
+    // Argument parsing must happen before matrix initialization,
+    // as initialize_matrix might use/modify argc, argv.
     if (parse_client_args(argc, argv, &server_ip, &server_port, &username_from_arg) == -1)
     {
+        // No matrix to clean up yet if arg parsing fails early
         exit(1);
     }
+
+    // Initialize LED Matrix (modifies argc and argv)
+    // Do this after parsing our own args but before using them if they might be consumed by matrix lib
+    matrix_ptr = initialize_matrix(&argc, &argv);
+    // We can check if matrix_ptr is NULL here if initialization is critical before connection,
+    // but errors are handled within initialize_matrix.
 
     strncpy(client_username, username_from_arg, MAX_USERNAME_LEN - 1);
     client_username[MAX_USERNAME_LEN - 1] = '\0';
@@ -920,6 +950,8 @@ int main(int argc, char *argv[])
     if (sockfd == -1)
     {
         fprintf(stderr, "Failed to connect to the server.\n");
+        if (matrix_ptr)
+            cleanup_matrix(matrix_ptr); // Cleanup matrix if connection fails
         exit(1);
     }
 
@@ -942,6 +974,8 @@ int main(int argc, char *argv[])
         {
             perror("select error");
             fprintf(stderr, "Disconnected from server. Exiting.\n");
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -991,6 +1025,8 @@ int main(int argc, char *argv[])
             else if (bytes_received == 0)
             {
                 printf("Disconnected from server. Exiting.\n");
+                if (matrix_ptr)
+                    cleanup_matrix(matrix_ptr); // Cleanup matrix
                 close(sockfd);
                 exit(1);
             }
@@ -998,6 +1034,8 @@ int main(int argc, char *argv[])
             {
                 perror("recv error");
                 fprintf(stderr, "Disconnected from server. Exiting.\n");
+                if (matrix_ptr)
+                    cleanup_matrix(matrix_ptr); // Cleanup matrix
                 close(sockfd);
                 exit(1);
             }
@@ -1005,6 +1043,8 @@ int main(int argc, char *argv[])
     }
 
     printf("Closing connection (unexpected exit from loop).\n");
+    if (matrix_ptr)
+        cleanup_matrix(matrix_ptr); // Cleanup matrix
     close(sockfd);
 
     return 0;
