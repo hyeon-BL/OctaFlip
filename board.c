@@ -48,7 +48,7 @@ void clear_matrix_display(struct RGBLedMatrix *matrix)
 {
     if (!matrix)
         return;
-    led_matrix_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
+    led_canvas_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
     // If using a canvas/swap chain model with the library:
     // struct LedCanvas *canvas = led_matrix_get_canvas(matrix);
     // led_canvas_fill(canvas, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
@@ -66,7 +66,7 @@ void cleanup_matrix(struct RGBLedMatrix *matrix)
 // --- Helper function to draw a single pixel (if needed directly) ---
 // static void set_pixel(struct RGBLedMatrix* matrix, int x, int y, RGBColor color) {
 //     if (!matrix || x < 0 || x >= 64 || y < 0 || y >= 64) return;
-//     led_matrix_set_pixel(matrix, x, y, color.r, color.g, color.b);
+//     led_canvas_set_pixel(matrix, x, y, color.r, color.g, color.b);
 // }
 
 // Define cell and piece dimensions based on a 64x64 matrix for an 8x8 board
@@ -89,7 +89,7 @@ static void draw_filled_rect(struct RGBLedMatrix *matrix, int x_start, int y_sta
         {
             if (x >= 0 && x < MATRIX_SIZE && y >= 0 && y < MATRIX_SIZE)
             {
-                led_matrix_set_pixel(matrix, x, y, color.r, color.g, color.b);
+                led_canvas_set_pixel(matrix, x, y, color.r, color.g, color.b);
             }
         }
     }
@@ -110,7 +110,7 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
     // If performance becomes an issue, using an offscreen canvas and swapping is preferred.
 
     // 1. Clear the matrix to background color
-    led_matrix_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
+    led_canvas_fill(matrix, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
 
     // 2. Draw Grid Lines [cite: 8, 9, 10, 11]
     // Grid lines are at the boundaries of the cells.
@@ -197,7 +197,7 @@ void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_boar
     // If drawing directly, the changes should be visible.
     // Some libraries might require an explicit "update" or "refresh" call if they buffer internally
     // even without an explicit offscreen canvas object. The rpi-rgb-led-matrix library
-    // often updates directly when led_matrix_set_pixel is called on the matrix pointer.
+    // often updates directly when led_canvas_set_pixel is called on the matrix pointer.
 }
 
 // (Standalone main function will be added in Stage L4)
