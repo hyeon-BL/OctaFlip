@@ -109,7 +109,7 @@ static void draw_filled_rect(struct LedCanvas *canvas, int x_start, int y_start,
     }
 }
 
-void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 1])
+void render_octaflip_board(struct RGBLedMatrix *matrix, const char octaflip_board[BOARD_ROWS][BOARD_COLS + 2])
 {
     if (!matrix)
         return;
@@ -252,7 +252,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: Line %d does not have %d characters. Found %zu.\n", i + 1, BOARD_COLS, strlen(input_board[i]));
             // Optionally, pad or truncate, or exit. For now, we'll proceed but ensure correct termination.
         }
-        // input_board[i][BOARD_COLS] = '\0'; // Ensure null termination at the correct spot
+        input_board[i][BOARD_COLS] = '\0'; // Ensure null termination at the correct spot
     }
 
     // 3. Render the board
