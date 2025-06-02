@@ -41,6 +41,31 @@ void cleanup_matrix(struct RGBLedMatrix *matrix)
     led_matrix_delete(matrix);
 }
 
+void clear_matrix_display(struct RGBLedMatrix *matrix)
+{
+    if (!matrix)
+        return;
+
+    // Create an offscreen canvas to draw the cleared state
+    struct LedCanvas *canvas = led_matrix_create_offscreen_canvas(matrix);
+    if (!canvas)
+    {
+        fprintf(stderr, "Error: Could not create offscreen canvas in clear_matrix_display.\n");
+        return;
+    }
+
+    led_canvas_fill(canvas, COLOR_BACKGROUND.r, COLOR_BACKGROUND.g, COLOR_BACKGROUND.b);
+
+    // Swap the cleared canvas to the display.
+    // led_matrix_swap_on_vsync takes ownership of 'canvas' and returns the PREVIOUS front buffer.
+    // This previous buffer should be deleted if not reused.
+    struct LedCanvas *previous_front_buffer = led_matrix_swap_on_vsync(matrix, canvas);
+    if (previous_front_buffer)
+    { // It might be NULL if this is the very first swap
+        led_canvas_clear(previous_front_buffer);
+    }
+}
+
 
 void render_octaflip_board_with_text(
     struct RGBLedMatrix *matrix,
