@@ -75,7 +75,7 @@ int is_valid_move(int sx, int sy, int tx, int ty) {
     return 0;
 }
 
-int negamax(char grid[9][9], char color, int depth, move *best_move) {
+int negamax(char grid[9][9], char color, int depth, MoveCoords *best_move) {
     if (depth == 0) return evaluate_board(grid, color);
     int best_score = -10000;
     char opp_color = (color == 'R') ? 'B' : 'R';
