@@ -9,6 +9,7 @@
 #include <errno.h>
 #include "protocol.h"
 #include "cJSON.h"
+#include "board.h" // Added for LED matrix control
 
 #define BUFFER_SIZE 2048
 #define CLIENT_RECV_BUFFER_MAX_LEN (BUFFER_SIZE * 2)
@@ -17,6 +18,8 @@ char client_username[MAX_USERNAME_LEN];
 char my_player_symbol = ' ';
 char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN];
 int client_recv_buffer_len = 0;
+
+static struct RGBLedMatrix *matrix_ptr = NULL; // Pointer for the LED matrix
 
 typedef struct
 {
@@ -29,86 +32,149 @@ typedef struct
 // Helper: Check if coordinates are within board limits (client-side)
 static int isWithinBounds_client(int r, int c)
 {
-    return (r >= 0 && r < 8 && c >= 0 && c < 8);
+    return (r >= 0 && r < BOARD_ROWS && c >= 0 && c < BOARD_COLS);
+}
+
+int evaluate_board(char grid[BOARD_ROWS][BOARD_COLS + 1], char color)
+{ // grid is 0-indexed
+    int my = 0, opp = 0;
+    char opp_color = (color == 'R') ? 'B' : 'R';
+    for (int i = 0; i < BOARD_ROWS; i++)
+    { // Iterate 0 to BOARD_ROWS-1
+        for (int j = 0; j < BOARD_COLS; j++)
+        { // Iterate 0 to BOARD_COLS-1
+            if (grid[i][j] == color)
+                my++;
+            else if (grid[i][j] == opp_color)
+                opp++;
+        }
+    }
+    return my - opp;
+}
+
+void clone_grid(char src[BOARD_ROWS][BOARD_COLS + 1], char dest[BOARD_ROWS][BOARD_COLS + 1])
+{
+    for (int i = 0; i < BOARD_ROWS; i++)
+    {
+        // memcpy is efficient for copying rows, including the null terminator if BOARD_COLS + 1 is the size
+        memcpy(dest[i], src[i], BOARD_COLS + 1);
+    }
+}
+
+void apply_move(char grid[BOARD_ROWS][BOARD_COLS + 1], int sx, int sy, int tx, int ty, char color)
+{                         // sx, sy, tx, ty are 0-indexed
+    grid[tx][ty] = color; // Place the piece on the target square
+    if (abs(sx - tx) > 1 || abs(sy - ty) > 1)
+    {                       // If it's a jump (distance > 1)
+        grid[sx][sy] = '.'; // Vacate the source square
+    }
+
+    // Flip opponent's pieces around the target square
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            if (dx == 0 && dy == 0)
+                continue; // Skip the piece itself
+
+            int ni = tx + dy; // Neighboring row (0-indexed)
+            int nj = ty + dx; // Neighboring column (0-indexed)
+
+            if (isWithinBounds_client(ni, nj) &&
+                grid[ni][nj] != '.' && grid[ni][nj] != color)
+            {
+                grid[ni][nj] = color; // Flip opponent's piece
+            }
+        }
+    }
+}
+
+// is_valid_move is assumed to be logically correct for the game rules.
+// It calculates differences, so it works with either 0-indexed or 1-indexed
+// as long as sx, sy, tx, ty are all consistently indexed.
+// It will now be called with 0-indexed coordinates.
+int is_valid_move(int sx, int sy, int tx, int ty)
+{
+    int dx = abs(sx - tx);
+    int dy = abs(sy - ty);
+    if ((dx == 1 && dy <= 1) || (dx == 2 && dy <= 2))
+    {
+        return dx <= 2 && dy <= 2 && (dx == dy || dx == 0 || dy == 0);
+    }
+    return 0;
+}
+
+int negamax(char grid[BOARD_ROWS][BOARD_COLS + 1], char color, int depth, MoveCoords *best_move)
+{ // grid is 0-indexed
+    if (depth == 0)
+        return evaluate_board(grid, color); // Pass 0-indexed grid
+    int best_score = -10000;                // A very small number
+    char opp_color = (color == 'R') ? 'B' : 'R';
+
+    for (int r_s = 0; r_s < BOARD_ROWS; r_s++)
+    { // Source row, 0-indexed
+        for (int c_s = 0; c_s < BOARD_COLS; c_s++)
+        { // Source col, 0-indexed
+            if (grid[r_s][c_s] != color)
+                continue; // Only consider player's pieces
+
+            // Iterate over possible moves (hops and jumps up to 2 squares away)
+            for (int dr = -2; dr <= 2; dr++)
+            { // Displacement in row
+                for (int dc = -2; dc <= 2; dc++)
+                { // Displacement in col
+                    if (dr == 0 && dc == 0)
+                        continue; // Must move to a different square
+
+                    int r_t = r_s + dr; // Target row, 0-indexed
+                    int c_t = c_s + dc; // Target col, 0-indexed
+
+                    // Check if the target is within bounds and is an empty spot
+                    if (!isWithinBounds_client(r_t, c_t) || grid[r_t][c_t] != '.')
+                        continue;
+
+                    // Check if the move is valid according to game rules
+                    if (!is_valid_move(r_s, c_s, r_t, c_t))
+                        continue; // Pass 0-indexed coords
+
+                    char new_grid[BOARD_ROWS][BOARD_COLS + 1];
+                    clone_grid(grid, new_grid);                      // Use 0-indexed clone
+                    apply_move(new_grid, r_s, c_s, r_t, c_t, color); // Use 0-indexed apply
+
+                    int score = -negamax(new_grid, opp_color, depth - 1, NULL); // Recursive call for opponent
+
+                    if (score > best_score)
+                    {
+                        best_score = score;
+                        if (best_move)
+                        {                        // If best_move pointer is provided, update it
+                            best_move->sx = r_s; // Store 0-indexed coordinates
+                            best_move->sy = c_s;
+                            best_move->tx = r_t;
+                            best_move->ty = c_t;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return best_score;
 }
 
 // Automated Move Generation Function
-MoveCoords move_generate(char current_board[8][9], char player_symbol)
+MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 1], char player_symbol)
 {
-    MoveCoords move;
+    MoveCoords move = {0, 0, 0, 0}; // Initialize (consider if a "no move" state is needed)
 
-    // Try to find a valid clone move first
-    for (int r_src = 0; r_src < 8; ++r_src)
-    {
-        for (int c_src = 0; c_src < 8; ++c_src)
-        {
-            if (current_board[r_src][c_src] == player_symbol)
-            {
-                // Check 1-step neighbors for clone
-                for (int dr = -1; dr <= 1; ++dr)
-                {
-                    for (int dc = -1; dc <= 1; ++dc)
-                    {
-                        if (dr == 0 && dc == 0)
-                            continue;
+    // negamax works with 0-indexed board and fills 'move' with 0-indexed coordinates
+    negamax(current_board, player_symbol, 4, &move);
 
-                        int r_dest = r_src + dr;
-                        int c_dest = c_src + dc;
+    // Convert 0-indexed coordinates from negamax to 1-indexed for the game protocol/output
+    move.sx += 1;
+    move.sy += 1;
+    move.tx += 1;
+    move.ty += 1;
 
-                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
-                        {
-                            move.sx = r_src + 1;
-                            move.sy = c_src + 1;
-                            move.tx = r_dest + 1;
-                            move.ty = c_dest + 1;
-                            printf("Client AI: Found clone move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
-                            return move;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no clone move, try to find a valid jump move
-    for (int r_src = 0; r_src < 8; ++r_src)
-    {
-        for (int c_src = 0; c_src < 8; ++c_src)
-        {
-            if (current_board[r_src][c_src] == player_symbol)
-            {
-                // Check 2-step neighbors for jump
-                for (int dr = -1; dr <= 1; ++dr)
-                {
-                    for (int dc = -1; dc <= 1; ++dc)
-                    {
-                        if (dr == 0 && dc == 0)
-                            continue;
-
-                        int r_dest = r_src + 2 * dr;
-                        int c_dest = c_src + 2 * dc;
-
-                        if (isWithinBounds_client(r_dest, c_dest) && current_board[r_dest][c_dest] == '.')
-                        {
-                            move.sx = r_src + 1;
-                            move.sy = c_src + 1;
-                            move.tx = r_dest + 1;
-                            move.ty = c_dest + 1;
-                            printf("Client AI: Found jump move (%d,%d) -> (%d,%d)\n", move.sx, move.sy, move.tx, move.ty);
-                            return move;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no valid moves found, pass (0,0,0,0 indicates pass)
-    printf("Client AI: No valid moves found. Passing.\n");
-    move.sx = 0;
-    move.sy = 0;
-    move.tx = 0;
-    move.ty = 0;
     return move;
 }
 
@@ -547,7 +613,7 @@ void send_registration_to_server(int sockfd, const char *username)
     free(json_string);
 }
 
-void display_board(char board[8][9])
+void display_board(char board[BOARD_ROWS][BOARD_COLS + 1])
 {
     printf("Current Board:\n");
     printf("   1 2 3 4 5 6 7 8\n");
@@ -593,6 +659,8 @@ void handle_server_message(const char *json_message, int sockfd)
         if (deserialize_server_register_nack(json_message, &nack_payload) == 0)
         {
             fprintf(stderr, "Registration failed: %s\n", nack_payload.reason);
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -641,6 +709,10 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             printf("\nIt's your turn! (Automating move)\n");
             display_board(yt_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, yt_payload.board);
+            }
 
             if (my_player_symbol == ' ')
             {
@@ -688,6 +760,10 @@ void handle_server_message(const char *json_message, int sockfd)
         {
             printf("Move accepted.\n");
             display_board(mo_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, mo_payload.board);
+            }
             printf("Next player: %s\n", mo_payload.next_player);
             if (strcmp(mo_payload.next_player, client_username) != 0)
             {
@@ -714,6 +790,10 @@ void handle_server_message(const char *json_message, int sockfd)
                 printf("\n");
             }
             display_board(im_payload.board);
+            if (matrix_ptr)
+            {
+                render_octaflip_board(matrix_ptr, im_payload.board);
+            }
             printf("Next player: %s. It might be your turn again if server indicates.\n", im_payload.next_player);
             if (strcmp(im_payload.next_player, client_username) != 0)
             {
@@ -764,6 +844,8 @@ void handle_server_message(const char *json_message, int sockfd)
                 printf("The game is a Draw.\n");
             }
 
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             printf("Exiting.\n");
             exit(0);
@@ -771,6 +853,8 @@ void handle_server_message(const char *json_message, int sockfd)
         else
         {
             fprintf(stderr, "Error deserializing game_over.\n");
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -906,10 +990,19 @@ int main(int argc, char *argv[])
     char *username_from_arg;
     int sockfd;
 
+    // Argument parsing must happen before matrix initialization,
+    // as initialize_matrix might use/modify argc, argv.
     if (parse_client_args(argc, argv, &server_ip, &server_port, &username_from_arg) == -1)
     {
+        // No matrix to clean up yet if arg parsing fails early
         exit(1);
     }
+
+    // Initialize LED Matrix (modifies argc, &argv)
+    // Do this after parsing our own args but before using them if they might be consumed by matrix lib
+    matrix_ptr = initialize_matrix(&argc, &argv);
+    // We can check if matrix_ptr is NULL here if initialization is critical before connection,
+    // but errors are handled within initialize_matrix.
 
     strncpy(client_username, username_from_arg, MAX_USERNAME_LEN - 1);
     client_username[MAX_USERNAME_LEN - 1] = '\0';
@@ -920,6 +1013,8 @@ int main(int argc, char *argv[])
     if (sockfd == -1)
     {
         fprintf(stderr, "Failed to connect to the server.\n");
+        if (matrix_ptr)
+            cleanup_matrix(matrix_ptr); // Cleanup matrix if connection fails
         exit(1);
     }
 
@@ -942,6 +1037,8 @@ int main(int argc, char *argv[])
         {
             perror("select error");
             fprintf(stderr, "Disconnected from server. Exiting.\n");
+            if (matrix_ptr)
+                cleanup_matrix(matrix_ptr); // Cleanup matrix
             close(sockfd);
             exit(1);
         }
@@ -991,6 +1088,8 @@ int main(int argc, char *argv[])
             else if (bytes_received == 0)
             {
                 printf("Disconnected from server. Exiting.\n");
+                if (matrix_ptr)
+                    cleanup_matrix(matrix_ptr); // Cleanup matrix
                 close(sockfd);
                 exit(1);
             }
@@ -998,6 +1097,8 @@ int main(int argc, char *argv[])
             {
                 perror("recv error");
                 fprintf(stderr, "Disconnected from server. Exiting.\n");
+                if (matrix_ptr)
+                    cleanup_matrix(matrix_ptr); // Cleanup matrix
                 close(sockfd);
                 exit(1);
             }
@@ -1005,6 +1106,8 @@ int main(int argc, char *argv[])
     }
 
     printf("Closing connection (unexpected exit from loop).\n");
+    if (matrix_ptr)
+        cleanup_matrix(matrix_ptr); // Cleanup matrix
     close(sockfd);
 
     return 0;
