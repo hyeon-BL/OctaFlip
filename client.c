@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/select.h>
 #include <errno.h>
+#include <signal.h> // Added for signal handling
 #include "protocol.h"
 #include "cJSON.h"
 
@@ -17,6 +18,7 @@ char client_username[MAX_USERNAME_LEN];
 char my_player_symbol = ' ';
 char client_recv_buffer[CLIENT_RECV_BUFFER_MAX_LEN];
 int client_recv_buffer_len = 0;
+int global_sockfd = -1; // Global variable for socket FD
 
 typedef struct
 {
@@ -764,14 +766,14 @@ void handle_server_message(const char *json_message, int sockfd)
                 printf("The game is a Draw.\n");
             }
 
-            close(sockfd);
+            close(global_sockfd); // Use global_sockfd
             printf("Exiting.\n");
             exit(0);
         }
         else
         {
             fprintf(stderr, "Error deserializing game_over.\n");
-            close(sockfd);
+            close(global_sockfd); // Use global_sockfd
             exit(1);
         }
     }
@@ -899,12 +901,22 @@ int connect_to_server(const char *server_ip, const char *server_port)
     return sockfd;
 }
 
+// Signal handler for SIGINT (Ctrl+C)
+void handle_sigint(int sig)
+{
+    printf("\nCtrl+C received. Disconnecting from server...\n");
+    if (global_sockfd != -1)
+    {
+        close(global_sockfd);
+    }
+    exit(0);
+}
+
 int main(int argc, char *argv[])
 {
     char *server_ip;
     char *server_port;
     char *username_from_arg;
-    int sockfd;
 
     if (parse_client_args(argc, argv, &server_ip, &server_port, &username_from_arg) == -1)
     {
@@ -916,40 +928,43 @@ int main(int argc, char *argv[])
 
     printf("Attempting to connect to server %s on port %s for user %s...\n", server_ip, server_port, client_username);
 
-    sockfd = connect_to_server(server_ip, server_port);
-    if (sockfd == -1)
+    global_sockfd = connect_to_server(server_ip, server_port); // Assign to global_sockfd
+    if (global_sockfd == -1)
     {
         fprintf(stderr, "Failed to connect to the server.\n");
         exit(1);
     }
 
-    printf("Connected to server. Socket FD: %d\n", sockfd);
+    printf("Connected to server. Socket FD: %d\n", global_sockfd);
 
-    send_registration_to_server(sockfd, client_username);
+    // Register signal handler for SIGINT
+    signal(SIGINT, handle_sigint);
+
+    send_registration_to_server(global_sockfd, client_username);
 
     fd_set read_fds;
 
     while (1)
     {
         FD_ZERO(&read_fds);
-        FD_SET(sockfd, &read_fds);
+        FD_SET(global_sockfd, &read_fds);
 
-        int current_max_fd = sockfd;
+        int current_max_fd = global_sockfd;
 
         int activity = select(current_max_fd + 1, &read_fds, NULL, NULL, NULL);
 
         if ((activity < 0) && (errno != EINTR))
         {
             perror("select error");
-            fprintf(stderr, "Disconnected from server. Exiting.\n");
-            close(sockfd);
+            fprintf(stderr, "Disconnected from server due to select error. Exiting.\n");
+            close(global_sockfd);
             exit(1);
         }
 
-        if (FD_ISSET(sockfd, &read_fds))
+        if (FD_ISSET(global_sockfd, &read_fds))
         {
             char temp_buf[BUFFER_SIZE];
-            int bytes_received = recv(sockfd, temp_buf, sizeof(temp_buf) - 1, 0);
+            int bytes_received = recv(global_sockfd, temp_buf, sizeof(temp_buf) - 1, 0);
             if (bytes_received > 0)
             {
                 temp_buf[bytes_received] = '\0';
@@ -975,7 +990,7 @@ int main(int argc, char *argv[])
                     strncpy(single_json_message, current_pos, message_len);
                     single_json_message[message_len] = '\0';
 
-                    handle_server_message(single_json_message, sockfd);
+                    handle_server_message(single_json_message, global_sockfd);
 
                     current_pos = newline_ptr + 1;
                 }
@@ -990,22 +1005,29 @@ int main(int argc, char *argv[])
             }
             else if (bytes_received == 0)
             {
-                printf("Disconnected from server. Exiting.\n");
-                close(sockfd);
+                printf("Disconnected from server (server closed connection). Exiting.\n");
+                close(global_sockfd);
                 exit(1);
             }
             else
             {
+                if (errno == EINTR)
+                { // Interrupted by our signal handler
+                    continue;
+                }
                 perror("recv error");
-                fprintf(stderr, "Disconnected from server. Exiting.\n");
-                close(sockfd);
+                fprintf(stderr, "Disconnected from server due to recv error. Exiting.\n");
+                close(global_sockfd);
                 exit(1);
             }
         }
     }
 
     printf("Closing connection (unexpected exit from loop).\n");
-    close(sockfd);
+    if (global_sockfd != -1)
+    {
+        close(global_sockfd);
+    }
 
     return 0;
 }
