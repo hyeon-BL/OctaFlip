@@ -167,7 +167,7 @@ MoveCoords move_generate(char current_board[BOARD_ROWS][BOARD_COLS + 1], char pl
     MoveCoords move = {0, 0, 0, 0}; // Initialize (consider if a "no move" state is needed)
 
     // negamax works with 0-indexed board and fills 'move' with 0-indexed coordinates
-    negamax(current_board, player_symbol, 4, &move);
+    negamax(current_board, player_symbol, 3, &move);
 
     // Convert 0-indexed coordinates from negamax to 1-indexed for the game protocol/output
     move.sx += 1;
