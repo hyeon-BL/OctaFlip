@@ -240,7 +240,7 @@ int main(int argc, char *argv[])
     printf("Enter 8x8 board configuration (8 lines, 8 chars each, e.g., R B . #):\n");
     for (int i = 0; i < BOARD_ROWS; ++i)
     {
-        if (fgets(input_board[i], sizeof(input_board[i]), stdin) == NULL)
+        if (fgets(input_board[i], sizeof(input_board[i]) + 1, stdin) == NULL) // +1 for newline
         {
             fprintf(stderr, "Error reading board input line %d.\n", i + 1);
             cleanup_matrix(matrix);
