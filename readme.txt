@@ -1,8 +1,6 @@
 Compile:
-    - server: gcc -o server server.c cJSON.c
-    - client: gcc -o client client.c cJSON.c
-
+   - make # for client test
+   - make BUILD_TYPE=standalone_test # for board stand_alone testing
 
 Get started:
-    - server: ./server
-    - client: ./client -ip 0.0.0.0 -port 5050 -username {username}
+    - client: ./client -ip {ip} -port {port} -username {username}
