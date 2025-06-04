@@ -1,52 +1,71 @@
-# Makefile (board.c와 같은 경로에 위치)
+# Makefile Unified
 
-# 컴파일러 및 링커 설정
+# 사용자가 명령줄에서 BUILD_TYPE을 지정하지 않은 경우 사용될 기본 빌드 타입입니다.
+# 특정 빌드를 실행하려면: make BUILD_TYPE=standalone_test
+# 기본 빌드를 실행하려면: make
+BUILD_TYPE ?= client
+
+# 컴파일러 및 공통 링커 설정
 CC = gcc
-CFLAGS = -Wall -O3 -g -Wextra -Wno-unused-parameter # 사용자 정의 CFLAGS 추가, STANDALONE_BOARD_TEST 제거
-LDFLAGS = -lrt -lm -lpthread # 기본 LDFLAGS
+# 공통 LDFLAGS (모든 빌드에 적용)
+# 원래 Makefile들에서는 LDFLAGS에 -lstdc++가 추가되었으므로 여기에 포함합니다.
+LDFLAGS_COMMON = -lrt -lm -lpthread -lstdc++
 
 # rpi-rgb-led-matrix 라이브러리 경로 설정
-# 이 Makefile이 있는 위치에서 rpi-rgb-led-matrix 폴더를 가리킵니다.
 RGB_MATRIX_BASE_DIR = ./rpi-rgb-led-matrix
 RGB_MATRIX_INC_DIR = $(RGB_MATRIX_BASE_DIR)/include
 RGB_MATRIX_LIB_DIR = $(RGB_MATRIX_BASE_DIR)/lib
 RGB_LIBRARY_NAME = rgbmatrix
+# 정적 라이브러리 파일 경로
 RGB_LIBRARY = $(RGB_MATRIX_LIB_DIR)/lib$(RGB_LIBRARY_NAME).a
 
-# 최종 실행 파일 이름 및 소스 파일
-TARGET = client
-SRC = client.c cJSON.c board.c # Add board.c here
+# BUILD_TYPE에 따른 조건부 설정
+ifeq ($(BUILD_TYPE), client)
+    TARGET_EXECUTABLE := client
+    SOURCE_FILES      := client.c cJSON.c board.c
+    # 이 빌드 타입을 위한 CFLAGS
+    CFLAGS            := -Wall -O3 -g -Wextra -Wno-unused-parameter
+else ifeq ($(BUILD_TYPE), standalone_test)
+    TARGET_EXECUTABLE := standalone_board_test
+    SOURCE_FILES      := board.c
+    # 이 빌드 타입을 위한 CFLAGS (-DSTANDALONE_BOARD_TEST 추가)
+    CFLAGS            := -Wall -O3 -g -Wextra -Wno-unused-parameter -DSTANDALONE_BOARD_TEST
+else
+    $(error "잘못된 BUILD_TYPE이 지정되었습니다: '$(BUILD_TYPE)'. 'client' 또는 'standalone_test' 중에서 선택하십시오.")
+endif
 
-# C API를 사용하는 경우 C++ 런타임 라이브러리 링크가 필요합니다.
-# rpi-rgb-led-matrix 라이브러리가 C++로 작성되었기 때문입니다.
-LDFLAGS += -lstdc++
+# 'all' 타겟은 'make' 명령어 실행 시 기본 목표입니다.
+# BUILD_TYPE에 따라 설정된 TARGET_EXECUTABLE을 빌드합니다.
+all: $(TARGET_EXECUTABLE)
 
-# 기본 빌드 목표
-all: $(TARGET)
-
-# 라이브러리 빌드 (필요한 경우)
-# rpi-rgb-led-matrix/lib 디렉토리의 Makefile이 라이브러리를 빌드합니다.
+# rpi-rgb-led-matrix 라이브러리 빌드 규칙
+# $(TARGET_EXECUTABLE)의 전제 조건입니다.
 $(RGB_LIBRARY):
-	@echo "Attempting to build rpi-rgb-led-matrix library..."
+	@echo "rpi-rgb-led-matrix 라이브러리('$(RGB_LIBRARY_NAME)') 빌드를 확인/진행합니다..."
+	@# 라이브러리 빌드 명령어. $(RGB_MATRIX_LIB_DIR) 내의 Makefile이
+	@# lib$(RGB_LIBRARY_NAME).a 파일을 올바르게 빌드한다고 가정합니다.
 	$(MAKE) -C $(RGB_MATRIX_LIB_DIR)
 
-# 실행 파일 빌드 규칙
-$(TARGET): $(SRC) $(RGB_LIBRARY)
-	@echo "Compiling and linking $(TARGET)..."
-	$(CC) $(CFLAGS) $(SRC) -o $(TARGET) \
+# 최종 실행 파일 빌드 규칙
+# 이 규칙은 BUILD_TYPE에 의해 결정되는 TARGET_EXECUTABLE, SOURCE_FILES, CFLAGS 변수를 사용합니다.
+$(TARGET_EXECUTABLE): $(SOURCE_FILES) $(RGB_LIBRARY)
+	@echo "'BUILD_TYPE=$(BUILD_TYPE)'에 대해 $(TARGET_EXECUTABLE)을(를) 컴파일하고 링크합니다..."
+	$(CC) $(CFLAGS) $(SOURCE_FILES) -o $@ \
 		-I$(RGB_MATRIX_INC_DIR) \
 		-L$(RGB_MATRIX_LIB_DIR) \
 		-l$(RGB_LIBRARY_NAME) \
-		$(LDFLAGS)
-	@echo "$(TARGET) built successfully."
+		$(LDFLAGS_COMMON)
+	@echo "$@ 빌드 성공."
 
-# 정리 규칙
+# 빌드 결과물 정리 규칙
+# 모든 알려진 설정의 실행 파일을 정리합니다.
 clean:
-	@echo "Cleaning up..."
-	rm -f $(TARGET)
-	# 필요하다면 $(RGB_MATRIX_LIB_DIR) 내의 object 파일도 정리할 수 있으나,
-	# 보통은 해당 라이브러리의 Makefile에서 처리합니다.
-	# $(MAKE) -C $(RGB_MATRIX_LIB_DIR) clean
+	@echo "빌드 결과물을 정리합니다..."
+	rm -f client standalone_board_test
+	@# 선택 사항: 'make clean' 시 rpi-rgb-led-matrix 라이브러리도 정리하려면 다음 주석을 해제하십시오.
+	@# echo "rpi-rgb-led-matrix 라이브러리를 정리합니다..."
+	@# $(MAKE) -C $(RGB_MATRIX_LIB_DIR) clean
+	@echo "정리 완료."
 
-# .PHONY는 실제 파일 이름이 아닌 타겟을 지정합니다.
-.PHONY: all clean
+# Phony 타겟 선언. 이 타겟들은 실제 파일이 아닙니다.
+.PHONY: all clean $(RGB_LIBRARY)
