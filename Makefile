@@ -1,14 +1,9 @@
 # Makefile Unified
 
-# 사용자가 명령줄에서 BUILD_TYPE을 지정하지 않은 경우 사용될 기본 빌드 타입입니다.
-# 특정 빌드를 실행하려면: make BUILD_TYPE=standalone_test
-# 기본 빌드를 실행하려면: make
 BUILD_TYPE ?= client
 
 # 컴파일러 및 공통 링커 설정
 CC = gcc
-# 공통 LDFLAGS (모든 빌드에 적용)
-# 원래 Makefile들에서는 LDFLAGS에 -lstdc++가 추가되었으므로 여기에 포함합니다.
 LDFLAGS_COMMON = -lrt -lm -lpthread -lstdc++
 
 # rpi-rgb-led-matrix 라이브러리 경로 설정
@@ -28,10 +23,9 @@ ifeq ($(BUILD_TYPE), client)
 else ifeq ($(BUILD_TYPE), standalone_test)
     TARGET_EXECUTABLE := standalone_board_test
     SOURCE_FILES      := board.c
-    # 이 빌드 타입을 위한 CFLAGS (-DSTANDALONE_BOARD_TEST 추가)
     CFLAGS            := -Wall -O3 -g -Wextra -Wno-unused-parameter -DSTANDALONE_BOARD_TEST
 else
-    $(error "잘못된 BUILD_TYPE이 지정되었습니다: '$(BUILD_TYPE)'. 'client' 또는 'standalone_test' 중에서 선택하십시오.")
+    $(error "Invalid BUILD_TYPE: '$(BUILD_TYPE)'. Use 'client' or 'standalone_test'")
 endif
 
 # 'all' 타겟은 'make' 명령어 실행 시 기본 목표입니다.
@@ -67,5 +61,4 @@ clean:
 	@# $(MAKE) -C $(RGB_MATRIX_LIB_DIR) clean
 	@echo "정리 완료."
 
-# Phony 타겟 선언. 이 타겟들은 실제 파일이 아닙니다.
 .PHONY: all clean $(RGB_LIBRARY)
