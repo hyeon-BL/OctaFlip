@@ -1,123 +1,159 @@
-# OctaFlip Online: A Networked C Implementation 🎮
+# OctaFlip Online: Networked C Game with LED Matrix Display & Automated Client
 
-**OctaFlip Online** is a client-server implementation of the strategic 8x8 board game, OctaFlip. This project brings the classic turn-based game to life, allowing two players to register, compete in real-time, and outmaneuver each other through tactical piece cloning, jumping, and flipping. Built entirely in C, it leverages TCP/IP sockets for network communication and JSON for a structured data interchange protocol.
 
-The server acts as the authoritative referee, managing game state, validating moves against the core OctaFlip rules, and synchronizing clients. Clients connect to the server, register with a unique username, and interact with the game through a command-line interface, receiving real-time updates.
+**OctaFlip Online** is a sophisticated C-based implementation of the strategic 8x8 board game, OctaFlip. This project showcases a full-fledged client-server architecture enabling two players to compete in real-time. Key features include an automated move-generation client, TCP/IP networking with a JSON-based protocol, and a vibrant visual display of the game board on a 64x64 RGB LED matrix using the `rpi-rgb-led-matrix` library.
+
+The server application acts as the central arbiter, managing all game logic, validating player moves against the established OctaFlip rules, and synchronizing game state across connected clients. Clients, featuring an automated `move_generate` function, connect to the server, register with a unique username, and autonomously participate in matches, with all board states rendered dynamically on the LED matrix.
 
 ## ✨ Key Features
 
-* **Client-Server Architecture**: Robust server managing game logic and client interactions.
-* **Real-time Two-Player Gameplay**: Engage in head-to-head OctaFlip matches.
-* **TCP/IP Socket Communication**: Reliable, stream-oriented communication between server and clients.
-* **JSON Messaging Protocol**: Structured and standardized data exchange for all game actions and updates.
-* **Player Registration**: Secure a spot with a unique username; first-come, first-served for play order.
-* **Server-Side Move Validation**: All moves are validated by the server against OctaFlip game rules.
-* **Turn-Based System with Timeouts**: Strict 5-second turn-timers enforce a brisk game pace; automatic pass on timeout.
-* **Dynamic Game State Updates**: Clients receive real-time board updates and game status notifications.
-* **Simplified Game Over Condition**: For this version, the game concludes after each player has made exactly one move (two moves total).
-* **Basic Disconnection Handling**: Server manages graceful turn passing if one client disconnects.
+* **Core OctaFlip Gameplay**: Implements all fundamental game mechanics including piece cloning, jumping, and the strategic flipping of opponent pieces.
+* **Networked Client-Server Architecture**: Robust two-player gameplay facilitated over TCP/IP, with the server managing game flow.
+* **JSON Messaging Protocol**: All client-server communication utilizes structured JSON payloads, delimited by newline characters (\n) for reliable message framing over TCP streams.
+* **Automated Client Move Generation**: The client employs a `move_generate` function to autonomously decide and execute moves within a specified timeout (e.g., 3 seconds for Assignment 3 server play).
+* **RGB LED Matrix Display**: Dynamic visualization of the 8x8 game board on a 64x64 LED panel, managed by a dedicated `board.c`/`board.h` module utilizing the `rpi-rgb-led-matrix` library.
+* **Server-Side Authority**: Centralized validation of all game rules, player turns, and move legality, including a 5-second turn timeout enforced by the server.
+* **Specialized Pass Move**: Clients can signal a "pass" turn by sending move coordinates `(0,0,0,0)` to the server.
+* **Comprehensive Server Logging**: The server maintains a visible log detailing each board state and the corresponding move executed.
+* **Flexible Client Configuration**: Client accepts server IP, port, and username via command-line arguments for easy connectivity.
+* **Graceful Disconnection Handling**: The server is designed to manage client disconnections, typically by passing the turn of a disconnected player.
 
 ## 💻 Tech Stack
-
-* **Language**: C (targeting C99/C11 standard for broad compatibility and modern features)
-* **Networking**: POSIX Sockets API (TCP/IP)
-    * `sys/socket.h`, `netdb.h`, `arpa/inet.h`
-* **Data Interchange**: JSON
-    * Utilizing a standard C JSON library (e.g., `cJSON` or `Jansson` as recommended)
-* **Server-Side Concurrency**: I/O Multiplexing using `select()` (or `poll()`) for handling multiple clients efficiently.
-* **Build System**: `gcc` (potentially with Makefiles for larger project organization - *TBD*)
+* **Language**: C (conforming to C99/C11 standards)
+* **Networking**: POSIX Sockets API (TCP/IP) for client-server communication.
+   * **Standard headers**: `sys/socket.h`, `netdb.h`, `arpa/inet.h`.
+* **JSON Processing**: `cJSON` library (sources compiled directly with the project).
+* **LED Matrix Display**: `rpi-rgb-led-matrix` library (linked statically).
+* **Server-Side Concurrency**: I/O multiplexing using `select()`.
+* **Build System**: GNU Make, with a flexible `Makefile` supporting different build targets.
+* **Core Libraries**: `librt`, `libm`, `libpthread`, `libstdc++` (as per Makefile linking).
 
 ## 📂 Project Structure
 
-The project is primarily composed of three main components:
+The project is organized into modular components for clarity and maintainability:
 
-octaflip-online/ <br>
-├── server.c          # Core server logic, game state management, client handling <br>
-├── client.c          # Client application, user interaction, server communication <br>
-├── protocol.h        # Shared definitions: message structs, constants, JSON schemas <br>
-└── README.md         # This file
 
-* The core OctaFlip game rules (board mechanics, move validation from Assignment 1) are integrated within `server.c`.
+octaflip-project/ <br>
+├── server.c                # Main server application logic, game orchestration <br>
+├── client.c                # Main client application logic, automated move generation <br>
+├── board.c                 # LED matrix rendering implementation <br>
+├── board.h                 # Public interface for the LED matrix display module <br>
+├── protocol.h              # Shared data structures for JSON message payloads <br>
+├── cJSON.c                 # cJSON library source file <br>
+├── cJSON.h                 # cJSON library header file <br>
+├── rpi-rgb-led-matrix/     # Directory containing the rpi-rgb-led-matrix library source <br>
+│   ├── include/            # Headers for rpi-rgb-led-matrix <br>
+│   └── lib/                # Contains Makefile to build librgbmatrix.a <br>
+│       └── librgbmatrix.a  # Static library (built by nested make) <br>
+├── Makefile                # Main Makefile for building the project <br>
+└── README.md               # This documentation file <br>
 
-## 🚀 Development Blueprint (Phased Approach)
 
-This project is structured across several key development phases, building from core game logic to full network integration:
+## 🛠️ Modules Overview
+* **`server.c`**: The heart of the game. Manages client connections, enforces game rules, processes moves, handles turns and timeouts, and broadcasts game state updates.
+* **`client.c`**: Connects to the server, handles registration, implements the `move_generate` function for autonomous play, and interfaces with the board.c module to display the game on the LED matrix.
+* **`board.c` / `board.h`**: Encapsulates all interactions with the `rpi-rgb-led-matrix` library. Provides functions to initialize the matrix, render the OctaFlip board state, and clean up resources. Includes a standalone test mode.
+* **`protocol.h`**: Defines C structures corresponding to the JSON message payloads exchanged between client and server, ensuring type safety and consistency.
+* **`cJSON.c` / `cJSON.h`**: Provides robust JSON parsing and generation capabilities.
 
-1.  **Phase 1: Core OctaFlip Game Logic (Stages 1-9)**
-    * Board representation and initialization.
-    * Implementing piece movements: Clone & Jump.
-    * Flip mechanism for opponent pieces.
-    * Comprehensive move validation (bounds, source, destination, distance).
-    * Turn management and game flow simulation.
-    * Advanced validation including pass moves.
-    * Game termination conditions (no empty cells, no pieces, consecutive passes).
-    * Winner determination and output formatting.
-    * Input parsing and main simulation loop (for local play).
+## 💬 Communication Protocol
+All client-server communication adheres to a defined JSON-based protocol over TCP. Messages are newline-terminated (`\n`). Key message types include:
 
-2.  **Phase 2: Network Foundation & Server Implementation (Stages 10-15)**
-    * **Stage 10: Common Protocol & JSON Utilities**: Defining message structs in `protocol.h` and establishing interfaces for JSON (de)serialization.
-    * **Stage 11 (Server)**: TCP socket setup, binding, listening, and basic non-blocking connection management using `select()`.
-    * **Stage 12 (Server)**: Player registration logic (username uniqueness, waiting list), `register_ack`/`nack`, and game initiation (`game_start` broadcast) once two players are ready.
-    * **Stage 13 (Server)**: Turn management, tracking current player, and sending `your_turn` notifications with board state and 5s timeout.
-    * **Stage 14 (Server)**: Receiving `move` messages, server-side validation against game rules, handling timeouts (auto-pass), and broadcasting results (`move_ok`, `invalid_move`, `pass`).
-    * **Stage 15 (Server)**: Implementing the specific game over condition (2 total moves), score calculation, sending `game_over` messages, and handling client disconnections.
+* **Client → Server**:
+   * `register`: `{"type": "register", "username": "<name>"}`
+   * `move`: `{"type": "move", "username": "<name>", "sx":X, "sy":Y, "tx":X', "ty":Y'}` (coordinates (0,0,0,0) indicate a pass)
 
-3.  **Phase 3: Client Implementation (Stages 16-19)**
-    * **Stage 16 (Client)**: Command-line argument parsing for server IP/port, TCP socket creation, and connection to the server.
-    * **Stage 17 (Client)**: Sending `register` requests, handling `register_ack`/`nack`, and processing the `game_start` message (displaying initial board, player roles).
-    * **Stage 18 (Client)**: Receiving `your_turn`, prompting user for move input (source & target coordinates), and sending `move` messages to the server.
-    * **Stage 19 (Client)**: Processing server updates (`move_ok`, `invalid_move`, `pass`), displaying board changes, and handling the `game_over` sequence (displaying scores, exiting).
+* **Server → Client**:
+   * `register_ack`: `{"type": "register_ack"}`
+   * `register_nack`: `{"type": "register_nack", "reason": "invalid"}`
+   * `game_start`: `{"type": "game_start", "players": ["u1","u2"], "first_player": "u1"}` (Board state sent with first `your_turn`)
+   * `your_turn`: `{"type": "your_turn", "board": [[...8x8 board strings...]], "timeout": 5.0}`
+   * `move_ok`: `{"type": "move_ok", "board": [[...]], "next_player": "<name>"}`
+   * `invalid_move`: `{"type": "invalid_move", "board": [[...]], "next_player": "<name>", "reason": "<optional_reason>"}`
+   * `pass`: `{"type": "pass", "next_player": "<name>"}`
+   * `game_over`: `{"type": "game_over", "scores": {"<user1_name>": S1, "<user2_name>": S2}}`
 
-## ⚙️ How to Compile & Run (Illustrative)
+## 🚀 Compilation and Execution
+This project uses a `Makefile` for streamlined building. Ensure you have `gcc`, `make`, and the `rpi-rgb-led-matrix` library source code available.
 
-*(Specific commands will depend on the chosen JSON library and final build setup)*
+1. Prerequisites
+   * A C compiler (e.g., `gcc`).
+   * GNU `make`.
+   * The `rpi-rgb-led-matrix` library source code, expected to be located in a subdirectory named `rpi-rgb-led-matrix/` relative to the `Makefile`.
 
-1.  **Prerequisites**:
-    * `gcc` compiler (or compatible C compiler).
-    * A C JSON library (e.g., `cJSON`) installed and linkable.
+2. Building the `rpi-rgb-led-matrix` Library
+The main `Makefile` attempts to build this library if its static archive `librgbmatrix.a` is not found. This typically involves running `make` within the library's own `lib` directory:
+```bash
+# This step is usually handled automatically by the main Makefile's dependency rule.
+# If manual build is needed:
+cd rpi-rgb-led-matrix/
+make -C lib
+cd ..
+```
+*Note: Ensure the `rpi-rgb-led-matrix` library is configured and built correctly for your specific Raspberry Pi hardware and panel setup.*
 
-2.  **Compilation**:
-    ```bash
-    # Example for cJSON
-    # Compile Server
-    gcc server.c cJSON.c -o server -lm # Or your specific JSON lib flags
+3. Building OctaFlip Executables
+The `Makefile` supports different build types via the `BUILD_TYPE` variable:
 
-    # Compile Client
-    gcc client.c cJSON.c -o client -lm # Or your specific JSON lib flags
-    ```
+   * To build the networked OctaFlip client (default):
+   ```bash
+   make
+   ```
 
-3.  **Running the Application**:
-    * **Start the Server**:
-        ```bash
-        ./server
-        # Server will listen on port 5050 (default, or as configured)
-        ```
-    * **Connect Clients**: Open two separate terminal windows.
-        ```bash
-        # Client 1
-        ./client <server_ip_address> 5050
+   or explicitly:
+   ```bash
+   make BUILD_TYPE=client
+   ```
+   This will generate the `client` executable, linking `client.c`, `board.c`, and `cJSON.c`.
 
-        # Client 2
-        ./client <server_ip_address> 5050
-        ```
-        (Replace `<server_ip_address>` with the actual IP of the server, e.g., `127.0.0.1` for local testing).
+   * To build the standalone LED board test program:
+   ```bash
+   make BUILD_TYPE=standalone_test
+   ```
+   This will generate the standalone_board_test executable from board.c with the STANDALONE_BOARD_TEST macro defined.
 
-## 💬 Protocol Overview
+   * To build the server (manual command):
+   *(The provided Makefile focuses on client-side builds. A server build can be done as follows):*
+   ```bash
+   gcc server.c cJSON.c -o server -lrt -lm -lpthread -lstdc++
+   ```
 
-Communication is managed via simple JSON payloads over TCP. Key message types include:
+5. Running the Application
+   * Start the OctaFlip Server:
+   ```bash
+   ./server
+   ```
+   The server will listen on a configured port (e.g., 5000 for local testing).
 
-* **Client -> Server**:
-    * `{"type": "register", "username": "<name>"}`
-    * `{"type": "move", "username": "<name>", "sx":X, "sy":Y, "tx":X', "ty":Y'}`
-* **Server -> Client**:
-    * `{"type": "register_ack"}` / `{"type": "register_nack", "reason": "<...>"}`
-    * `{"type": "game_start", "players": ["u1","u2"], "first_player": "u1", "initial_board": [[...]]}`
-    * `{"type": "your_turn", "board": [[...]], "timeout": 5.0}`
-    * `{"type": "move_ok", "board": [[...]], "next_player": "<name>"}`
-    * `{"type": "invalid_move", "board": [[...]], "next_player": "<name>"}`
-    * `{"type": "pass", "next_player": "<name>"}`
-    * `{"type": "game_over", "scores": {"u1": S1, "u2": S2}}`
+   * Run the OctaFlip Client:
+   *(Requires `sudo` for direct hardware access by the rpi-rgb-led-matrix library)*
+   ```bash
+   # Example for a local server on port 5000:
+   sudo ./client -ip 127.0.0.1 -port 5000 -username YOUR_CHOSEN_USERNAME
+   ```
+   * Run the Standalone LED Board Test:
+   *(Requires `sudo`)*
+   ```bash
+   sudo ./standalone_board_test
+   ```
+   After running, paste an 8x8 board configuration into the terminal, followed by EOF (Ctrl+D). The board will be displayed on the LED matrix.
 
----
+6. Cleaning Build Artifacts
+```bash
+make clean
+```
+This will remove the `client` and `standalone_board_test` executables.
 
-This README aims to provide a comprehensive yet accessible overview for developers looking to understand, build, or contribute to OctaFlip Online.
+## 💡 LED Matrix Display (`board.c` / `board.h`)
+The `board.c` module is responsible for all direct interactions with the 64x64 RGB LED matrix.
+* **Initialization**: `client.c` calls `initialize_matrix(&argc, &argv)` at startup. This function also handles command-line options specific to the `rpi-rgb-led-matrix` library.
+* **Rendering**: Upon receiving board updates from the server, `client.c` calls `render_octaflip_board(matrix_ptr, board_state)` to draw the current game state.
+* **Standalone Test**: The `standalone_board_test` executable (built via `make BUILD_TYPE=standalone_test`) directly uses `board.c` to read an 8x8 board from standard input and display it, facilitating easier testing and grading of the LED display component.
+* **Customization**: Piece representation (colors, patterns) and grid lines can be customized within `board.c`.
+
+## 🧠 Automated Move Generation (`client.c`)
+The client application (`client.c`) features an automated move selection mechanism:
+* A `move_generate(char current_board[8][9], char my_player_symbol)` function is implemented.
+* When the server indicates it's the client's turn (via a `your_turn` message), this function is invoked with the current board state.
+* It must analyze the board and return a valid move (source `sx`, `sy` and target `tx`, `ty` coordinates, or `(0,0,0,0)` for a pass) within the server-specified timeout.
+* The sophistication of the move generation algorithm (heuristics, game theory, AI) is up to the implementer.
