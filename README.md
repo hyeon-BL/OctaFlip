@@ -1,5 +1,7 @@
 # OctaFlip Online: Networked C Game with LED Matrix Display & Automated Client
 
+<img width="80%" src="https://github.com/user-attachments/assets/5af1778f-d556-49bf-8c17-af9e9ef5a5c6"/>
+
 
 **OctaFlip Online** is a sophisticated C-based implementation of the strategic 8x8 board game, OctaFlip. This project showcases a full-fledged client-server architecture enabling two players to compete in real-time. Key features include an automated move-generation client, TCP/IP networking with a JSON-based protocol, and a vibrant visual display of the game board on a 64x64 RGB LED matrix using the `rpi-rgb-led-matrix` library.
 
